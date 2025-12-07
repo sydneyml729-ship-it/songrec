@@ -1,7 +1,10 @@
 
 # app.py — single-file Streamlit app (Spotify-compliant)
-# Features: Automatic genre-driven background (no manual controls), Standard & Niche recs,
-# fair interleaving across ALL inputs, min-2 artist guarantee in artist buckets.
+# Features:
+# - Standard recommendations vary: mix favorite artists' top tracks + related artists' top tracks,
+#   fairly interleaved across ALL inputs, stably shuffled per day.
+# - Niche mode with min-2 artist guarantee and interleaving.
+# - Automatic genre-driven background (no manual controls).
 
 import os
 import time
@@ -12,6 +15,9 @@ import urllib.request
 import urllib.error
 import re
 import unicodedata
+import hashlib
+import random
+from datetime import datetime
 from typing import List, Tuple, Dict, Optional
 
 import streamlit as st
@@ -121,7 +127,6 @@ def build_css_theme(primary: dict, secondary: dict | None = None) -> dict:
     }}
     </style>
     """
-    # minimal icon set; can be extended per-genre if you add "icons" to theme entries
     icon_set = {"artist": primary.get("emoji", "🎵"), "genre": "🏷️", "spark": "✨"}
     return {"css": css, "emoji": primary.get("emoji", "🎵"), "accent": accent, "icons": icon_set}
 
@@ -358,6 +363,17 @@ def resolve_favorite_to_artist(
 # =========================
 #  Recommendation logic
 # =========================
+def _stable_shuffle(items: List[Tuple[str, str]], salt: str) -> List[Tuple[str, str]]:
+    """
+    Deterministic shuffle using a SHA-256 seed derived from 'salt'.
+    Ensures results vary day-to-day and per-input, but are stable within a day/session.
+    """
+    seed_int = int.from_bytes(hashlib.sha256(salt.encode("utf-8")).digest(), "big")
+    rng = random.Random(seed_int)
+    items_copy = items.copy()
+    rng.shuffle(items_copy)
+    return items_copy
+
 def recommend_from_favorites(
     client_id: str,
     client_secret: str,
@@ -366,10 +382,12 @@ def recommend_from_favorites(
     max_recs: int = 3,
 ) -> List[Tuple[str, str]]:
     """
-    Fair, interleaved Standard recommendations across ALL favorites:
-    - Build a candidate list per resolved favorite artist (Top Tracks excluding exact favorites).
-    - Interleave per-artist lists round-robin.
-    - Deduplicate & pick up to max_recs (ensuring representation).
+    STANDARD (varied) recommendations across ALL inputs:
+    - For each resolved favorite artist: get favorite artist top tracks.
+    - For each resolved favorite artist: pick up to 3 related artists (less popular first) and get their top tracks.
+    - Interleave favorite and related lists across ALL inputs for fairness.
+    - Stable shuffle (based on date + market + inputs) so results vary but feel consistent.
+    - Deduplicate and select up to max_recs.
     """
     sp = SpotifyClient(client_id, client_secret, market=market or "US")
     favorites = [(t.strip(), a.strip()) for (t, a) in favorites if t and a]
@@ -387,8 +405,8 @@ def recommend_from_favorites(
         except Exception:
             continue
 
-    # Build per-artist candidate lists
-    per_artist_lists: List[List[Tuple[str, str]]] = []
+    # Per-artist favorite top tracks
+    per_artist_fav: List[List[Tuple[str, str]]] = []
     for (aid, _aname, _g) in artist_infos:
         lst: List[Tuple[str, str]] = []
         try:
@@ -398,19 +416,66 @@ def recommend_from_favorites(
                 if not tname or not pa_name:
                     continue
                 key = (tname.strip().lower(), pa_name.strip().lower())
-                if key in fav_keys:
+                if key in fav_keys:  # skip exact favorite pair
                     continue
                 lst.append((f"{tname} — {pa_name}", turl or ""))
         except Exception:
             pass
-        per_artist_lists.append(lst)
+        per_artist_fav.append(lst)
 
-    # Interleave across favorites (ensures representation)
-    combined = _interleave_lists(per_artist_lists)
+    # Per-artist related artists' top tracks (favor less popular; cap calls for rate discipline)
+    per_artist_related: List[List[Tuple[str, str]]] = []
+    for (aid, _aname, _g) in artist_infos:
+        lst: List[Tuple[str, str]] = []
+        try:
+            related = sp.get_related_artists(aid)
+            # Sort ascending popularity to promote niche & variety; take up to 3 related
+            related_sorted = sorted(related, key=lambda x: x.get("popularity", 50))
+            for ar in related_sorted[:3]:
+                rid = ar.get("id")
+                rname = ar.get("name")
+                if not rid or not rname:
+                    continue
+                # Get a few top tracks for the related artist
+                try:
+                    rtop = sp.get_artist_top_tracks(rid, limit=5)
+                    for tr in rtop:
+                        _, tname, _, pa_name, turl = SpotifyClient.extract_track_core(tr)
+                        if not tname or not pa_name:
+                            continue
+                        # Avoid recommending exact favorites
+                        key = (tname.strip().lower(), pa_name.strip().lower())
+                        if key in fav_keys:
+                            continue
+                        lst.append((f"{tname} — {pa_name}", turl or ""))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        per_artist_related.append(lst)
 
-    # Deduplicate while selecting up to max_recs
+    # Interleave across ALL inputs for fairness
+    fav_combined = _interleave_lists(per_artist_fav)
+    rel_combined = _interleave_lists(per_artist_related)
+
+    # Mix favorite and related results: alternate chunks to avoid dominance
+    mixed: List[Tuple[str, str]] = []
+    # Take chunks of 1 fav : 1 related (can be tuned)
+    i_f, i_r = 0, 0
+    while i_f < len(fav_combined) or i_r < len(rel_combined):
+        if i_f < len(fav_combined):
+            mixed.append(fav_combined[i_f]); i_f += 1
+        if i_r < len(rel_combined):
+            mixed.append(rel_combined[i_r]); i_r += 1
+
+    # Stable shuffle by (date + market + concatenated favorites) for varied-but-repeatable daily results
+    date_key = datetime.utcnow().strftime("%Y%m%d")
+    salt = f"{market}|{date_key}|{'|'.join([t+'—'+a for (t,a) in favorites])}"
+    mixed_shuffled = _stable_shuffle(mixed, salt)
+
+    # Deduplicate and take up to max_recs
     seen, recs = set(), []
-    for (text, url) in combined:
+    for (text, url) in mixed_shuffled:
         if text not in seen:
             seen.add(text)
             recs.append((text, url))
@@ -488,7 +553,8 @@ def build_recommendation_buckets(
             lst = []
             try:
                 related = sp.get_related_artists(aid)
-                for ar in related:
+                related_sorted = sorted(related, key=lambda x: x.get("popularity", 50))
+                for ar in related_sorted:
                     name = ar.get("name")
                     pop = ar.get("popularity", 50)
                     url = (ar.get("external_urls") or {}).get("spotify", "")
@@ -585,7 +651,7 @@ def collect_genres_for_favorites(
     return genre_pool
 
 # =========================
-#  Sidebar / Inputs (NO personalization controls)
+#  Sidebar / Inputs (NO manual personalization)
 # =========================
 with st.sidebar:
     st.header("Settings")
@@ -674,9 +740,9 @@ if run:
         st.markdown("**🏷️ Detected genres:** <span class='badge'>mixed/unknown</span>", unsafe_allow_html=True)
 
     # Tabs for modes
-    tab_std, tab_niche = st.tabs([f"{theme['emoji']} Standard", "🌱 Niche"])
+    tab_std, tab_niche = st.tabs([f"{theme['emoji']} Standard (varied)", "🌱 Niche"])
 
-    # --- Standard ---
+    # --- Standard (varied) ---
     with tab_std:
         with st.spinner("Fetching recommendations..."):
             recs = recommend_from_favorites(CLIENT_ID, CLIENT_SECRET, market, favorites, max_recs=3)
