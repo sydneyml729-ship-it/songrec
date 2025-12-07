@@ -1,6 +1,7 @@
 
 # app.py — single-file Streamlit app (Spotify-compliant)
-# Features: Standard & Niche recs; fair interleaving across ALL inputs; min-2 artists guarantee; genre-driven UI.
+# Features: Automatic genre-driven background (no manual controls), Standard & Niche recs,
+# fair interleaving across ALL inputs, min-2 artist guarantee in artist buckets.
 
 import os
 import time
@@ -45,30 +46,30 @@ def link_button(label: str, url: str):
 #  Genre Themes (gradient & optional image)
 # =========================
 GENRE_THEMES = {
-    "pop": {"accent": "#FF62B3", "gradient": "linear-gradient(135deg,#ff9ac6 0%,#ffd1e0 100%)",
-            "image": "assets/bg_pop.jpg", "emoji": "✨", "font": "system-ui"},
-    "rock": {"accent": "#FF3B3B", "gradient": "linear-gradient(135deg,#3f3f3f 0%,#0f0f0f 100%)",
-             "image": "assets/bg_rock.jpg", "emoji": "🎸", "font": "system-ui"},
-    "hip hop": {"accent": "#FDBA3B", "gradient": "linear-gradient(135deg,#0e0e0e 0%,#1a1a1a 100%)",
-                "image": "assets/bg_hiphop.jpg", "emoji": "🧢", "font": "system-ui"},
-    "indie": {"accent": "#66D9A3", "gradient": "linear-gradient(135deg,#94e3bf 0%,#e8fff4 100%)",
-              "image": "assets/bg_indie.jpg", "emoji": "🍃", "font": "system-ui"},
+    "pop":        {"accent": "#FF62B3", "gradient": "linear-gradient(135deg,#ff9ac6 0%,#ffd1e0 100%)",
+                   "image": "assets/bg_pop.jpg",        "emoji": "✨", "font": "system-ui"},
+    "rock":       {"accent": "#FF3B3B", "gradient": "linear-gradient(135deg,#3f3f3f 0%,#0f0f0f 100%)",
+                   "image": "assets/bg_rock.jpg",       "emoji": "🎸", "font": "system-ui"},
+    "hip hop":    {"accent": "#FDBA3B", "gradient": "linear-gradient(135deg,#0e0e0e 0%,#1a1a1a 100%)",
+                   "image": "assets/bg_hiphop.jpg",     "emoji": "🧢", "font": "system-ui"},
+    "indie":      {"accent": "#66D9A3", "gradient": "linear-gradient(135deg,#94e3bf 0%,#e8fff4 100%)",
+                   "image": "assets/bg_indie.jpg",      "emoji": "🍃", "font": "system-ui"},
     "electronic": {"accent": "#55C2FF", "gradient": "linear-gradient(135deg,#0b1d33 0%,#142a4d 100%)",
                    "image": "assets/bg_electronic.jpg", "emoji": "⚡", "font": "system-ui"},
-    "jazz": {"accent": "#9E7AFF", "gradient": "linear-gradient(135deg,#2e1a47 0%,#241a3a 100%)",
-             "image": "assets/bg_jazz.jpg", "emoji": "🎷", "font": "Georgia, serif"},
-    "classical": {"accent": "#D3C4A4", "gradient": "linear-gradient(135deg,#f7f3e9 0%,#e6dcc7 100%)",
-                  "image": "assets/bg_classical.jpg", "emoji": "🎼", "font": "Georgia, serif"},
-    "country": {"accent": "#E39C5A", "gradient": "linear-gradient(135deg,#f2dcc1 0%,#e3c199 100%)",
-                "image": "assets/bg_country.jpg", "emoji": "🤠", "font": "system-ui"},
-    "latin": {"accent": "#FF6F61", "gradient": "linear-gradient(135deg,#ffd4c6 0%,#ffc1b1 100%)",
-              "image": "assets/bg_latin.jpg", "emoji": "💃", "font": "system-ui"},
-    "k-pop": {"accent": "#7AE0FF", "gradient": "linear-gradient(135deg,#7ae0ff 0%,#c2f2ff 100%)",
-              "image": "assets/bg_kpop.jpg", "emoji": "🌈", "font": "system-ui"},
-    "metal": {"accent": "#A0A0A0", "gradient": "linear-gradient(135deg,#1a1a1a 0%,#2a2a2a 100%)",
-              "image": "assets/bg_metal.jpg", "emoji": "🤘", "font": "system-ui"},
-    "__default__": {"accent": "#1DB954", "gradient": "linear-gradient(135deg,#0b0b0b 0%,#141414 100%)",
-                    "image": "assets/bg_default.jpg", "emoji": "🎵", "font": "system-ui"},
+    "jazz":       {"accent": "#9E7AFF", "gradient": "linear-gradient(135deg,#2e1a47 0%,#241a3a 100%)",
+                   "image": "assets/bg_jazz.jpg",       "emoji": "🎷", "font": "Georgia, serif"},
+    "classical":  {"accent": "#D3C4A4", "gradient": "linear-gradient(135deg,#f7f3e9 0%,#e6dcc7 100%)",
+                   "image": "assets/bg_classical.jpg",  "emoji": "🎼", "font": "Georgia, serif"},
+    "country":    {"accent": "#E39C5A", "gradient": "linear-gradient(135deg,#f2dcc1 0%,#e3c199 100%)",
+                   "image": "assets/bg_country.jpg",    "emoji": "🤠", "font": "system-ui"},
+    "latin":      {"accent": "#FF6F61", "gradient": "linear-gradient(135deg,#ffd4c6 0%,#ffc1b1 100%)",
+                   "image": "assets/bg_latin.jpg",      "emoji": "💃", "font": "system-ui"},
+    "k-pop":      {"accent": "#7AE0FF", "gradient": "linear-gradient(135deg,#7ae0ff 0%,#c2f2ff 100%)",
+                   "image": "assets/bg_kpop.jpg",       "emoji": "🌈", "font": "system-ui"},
+    "metal":      {"accent": "#A0A0A0", "gradient": "linear-gradient(135deg,#1a1a1a 0%,#2a2a2a 100%)",
+                   "image": "assets/bg_metal.jpg",      "emoji": "🤘", "font": "system-ui"},
+    "__default__":{"accent": "#1DB954", "gradient": "linear-gradient(135deg,#0b0b0b 0%,#141414 100%)",
+                   "image": "assets/bg_default.jpg",    "emoji": "🎵", "font": "system-ui"},
 }
 
 def _interleave_lists(lists: List[List[Tuple[str, str]]]) -> List[Tuple[str, str]]:
@@ -82,11 +83,11 @@ def _interleave_lists(lists: List[List[Tuple[str, str]]]) -> List[Tuple[str, str
     return out
 
 def build_css_theme(primary: dict, secondary: dict | None = None) -> dict:
-    """Build CSS string for Streamlit app based on genre theme(s)."""
+    """Build CSS string for Streamlit app based on genre theme(s); no manual overrides."""
     gradient = primary["gradient"] if not secondary else (
         f"linear-gradient(135deg,{primary['accent']}55 0%,{secondary['accent']}55 100%), {primary['gradient']}"
     )
-    image_url = primary.get("image", "")
+    image_url = primary.get("image", "").strip()
     accent = primary["accent"]
     font = primary.get("font", "system-ui")
 
@@ -113,12 +114,19 @@ def build_css_theme(primary: dict, secondary: dict | None = None) -> dict:
     h1, h2, h3, h4, h5, h6 {{ color: {accent}; }}
     a {{ color: {accent}; text-decoration: none; }}
     a:hover {{ text-decoration: underline; }}
+    .badge {{
+        display:inline-block; padding:4px 10px; margin:2px;
+        border-radius: 999px; background-color: {accent}22; color: {accent};
+        border: 1px solid {accent}55; font-size: 0.85rem;
+    }}
     </style>
     """
-    return {"css": css, "emoji": primary.get("emoji", "🎵"), "accent": accent}
+    # minimal icon set; can be extended per-genre if you add "icons" to theme entries
+    icon_set = {"artist": primary.get("emoji", "🎵"), "genre": "🏷️", "spark": "✨"}
+    return {"css": css, "emoji": primary.get("emoji", "🎵"), "accent": accent, "icons": icon_set}
 
 def pick_theme_by_genres(genres: List[str]) -> dict:
-    """Choose a primary theme by frequency; blend with second-most if present."""
+    """Choose a primary theme by frequency; blend with second-most if present. No manual overrides."""
     counts: Dict[str, int] = {}
     for g in genres:
         g_norm = (g or "").lower()
@@ -400,7 +408,7 @@ def recommend_from_favorites(
     # Interleave across favorites (ensures representation)
     combined = _interleave_lists(per_artist_lists)
 
-    # Deduplicate while selecting up to max_recs with fair share
+    # Deduplicate while selecting up to max_recs
     seen, recs = set(), []
     for (text, url) in combined:
         if text not in seen:
@@ -431,7 +439,6 @@ def build_recommendation_buckets(
     artist_pop_max: int = 45,
     per_bucket: int = 5,
     min_artists: int = 2,           # guarantee at least 2 artists in artist-based buckets
-    extra_genre: str = "",          # optional manual genre from user
 ) -> Dict[str, List[Tuple[str, str]]]:
     sp = SpotifyClient(client_id, client_secret, market=market or "US")
     favorites = [(t.strip(), a.strip()) for (t, a) in favorites if t and a]
@@ -512,8 +519,6 @@ def build_recommendation_buckets(
 
     # 3) Rising stars in your genres (Search by genre) — interleave & guarantee min_artists
     genre_pool = {g for (_aid, _aname, genres) in fav_artist_infos for g in (genres or [])}
-    if extra_genre.strip():
-        genre_pool.add(extra_genre.strip())
     if not genre_pool:
         genre_pool |= _backfill_genres_from_related(sp, fav_artist_infos)
     if not genre_pool:
@@ -580,7 +585,7 @@ def collect_genres_for_favorites(
     return genre_pool
 
 # =========================
-#  Sidebar / Inputs
+#  Sidebar / Inputs (NO personalization controls)
 # =========================
 with st.sidebar:
     st.header("Settings")
@@ -591,7 +596,6 @@ with st.sidebar:
         artist_pop_max = st.slider("Max artist popularity (artists/rising stars)", 0, 100, 45, help="Lower = more niche")
         per_bucket = st.slider("Items per bucket", 1, 10, 5)
         min_artists = st.slider("Minimum artists per bucket (guaranteed)", 0, 5, 2)
-        extra_genre = st.text_input("Optional: add a genre (e.g., 'indie', 'afrobeats')", value="")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -651,11 +655,23 @@ if run:
         st.warning("Please enter at least one valid Title + Artist pair.")
         st.stop()
 
-    # Apply genre-driven theme (dominant or blended across ALL inputs)
+    # AUTOMATIC genre-driven background — based solely on inputs (no manual personalization)
     genres = collect_genres_for_favorites(CLIENT_ID, CLIENT_SECRET, market, favorites)
     theme = pick_theme_by_genres(genres)
     st.markdown(theme["css"], unsafe_allow_html=True)
-    st.markdown(f"### {theme['emoji']} Personalized Interface")
+    st.markdown(f"### {theme['emoji']} Personalized Interface (auto)")
+
+    # Context badges (artists + genres)
+    icons = theme["icons"]
+    st.markdown(f"**{icons['artist']} Inputs:** "
+                f"`{s1_artist or '—'}` · `{s2_artist or '—'}` · `{s3_artist or '—'}`")
+    unique_genres = sorted(set([g.lower() for g in genres]))[:6] if genres else []
+    if unique_genres:
+        st.markdown("**🏷️ Detected genres:** " + " ".join(
+            [f"<span class='badge'>{g}</span>" for g in unique_genres]
+        ), unsafe_allow_html=True)
+    else:
+        st.markdown("**🏷️ Detected genres:** <span class='badge'>mixed/unknown</span>", unsafe_allow_html=True)
 
     # Tabs for modes
     tab_std, tab_niche = st.tabs([f"{theme['emoji']} Standard", "🌱 Niche"])
@@ -685,7 +701,6 @@ if run:
                 artist_pop_max=artist_pop_max,
                 per_bucket=per_bucket,
                 min_artists=min_artists,
-                extra_genre=extra_genre,
             )
         st.subheader("Recommendations")
         for title, items in buckets.items():
@@ -698,14 +713,3 @@ if run:
                     if url:
                         link_button("Open in Spotify", url)
             st.divider()
-
-with st.expander("🎨 Personalization", expanded=False):
-    # Let user override the theme image with either a URL or file upload
-    use_bg_override = st.checkbox("Use custom background", value=False)
-    bg_url = st.text_input("Background image URL (optional)", value="")
-    bg_upload = st.file_uploader("Upload background image (optional)", type=["jpg", "jpeg", "png"])
-    # Accent override
-    custom_accent = st.color_picker("Accent color override", value="#000000")  # #000000 means "no override"
-    # Icon pack style (emoji)
-    icon_style = st.selectbox("Icon style", ["Default", "Minimal", "Playful", "Classic"])
-
