@@ -1,5 +1,5 @@
 
-# app.py (single-file version)
+# app.py (single-file version; consistent indentation)
 import os
 import sys
 import time
@@ -8,7 +8,6 @@ import base64
 import urllib.parse
 import urllib.request
 import urllib.error
-import pathlib
 import re
 import unicodedata
 from typing import List, Tuple, Dict, Optional
@@ -108,11 +107,12 @@ class SpotifyClient:
                     return json.loads(resp.read().decode("utf-8"))
             if e.code == 401:
                 self._fetch_access_token()
-                req = urllib.request.Request(
+                req2 = urllib.request.Request(
                     url, headers={"Authorization": f"Bearer {self._access_token}"}, method="GET"
                 )
-                with urllib.request.urlopen(req, timeout=20) as resp:
+                with urllib.request.urlopen(req2, timeout=20) as resp:
                     return json.loads(resp.read().decode("utf-8"))
+            # Other errors: bubble up
             raise
 
     # --- Search helpers ---
@@ -135,10 +135,10 @@ class SpotifyClient:
             data = self._api_get("/search", {"q": q, "type": "track", "limit": str(limit), "market": self.market})
             results = (data.get("tracks") or {}).get("items", []) or []
         if not results:
-            q = " ".join([f"track:{title.strip()}" if title else "", f"artist:{artist.strip()}" if artist else ""]).strip()
-            if q:
-                data = self._api_get("/search", {"q": q, "type": "track", "limit": str(limit), "market": self.market})
-                results = (data.get("tracks") or {}).get("items", []) or []
+            q2 = " ".join([f"track:{title.strip()}" if title else "", f"artist:{artist.strip()}" if artist else ""]).strip()
+            if q2:
+                data2 = self._api_get("/search", {"q": q2, "type": "track", "limit": str(limit), "market": self.market})
+                results = (data2.get("tracks") or {}).get("items", []) or []
         return results
 
     def search_tracks_free(self, query: str, limit: int = 10) -> List[Dict]:
@@ -207,11 +207,13 @@ def _clean(s: str) -> str:
 
 def _try_search_variants(sp: SpotifyClient, title: str, artist: str, limit: int = 10) -> List[dict]:
     results: List[dict] = []
+
     # Optional helpers
     try:
         results = sp.search_tracks_filtered(title=title, artist=artist, limit=limit) or []
     except Exception:
         results = []
+
     if not results:
         try:
             q = " ".join([title or "", artist or ""]).strip()
@@ -219,22 +221,35 @@ def _try_search_variants(sp: SpotifyClient, title: str, artist: str, limit: int 
                 results = sp.search_tracks_free(q, limit=limit) or []
         except Exception:
             results = []
+
     # Fallbacks
     if not results:
-        try: results = sp.search_track(title, artist, limit=limit) or []
-        except Exception: results = []
+        try:
+            results = sp.search_track(title, artist, limit=limit) or []
+        except Exception:
+            results = []
+
     if not results and title:
-        try: results = sp.search_track(title, "", limit=limit) or []
-        except Exception: pass
+        try:
+            results = sp.search_track(title, "", limit=limit) or []
+        except Exception:
+            pass
+
     if not results and artist:
-        try: results = sp.search_track("", artist, limit=limit) or []
-        except Exception: pass
+        try:
+            results = sp.search_track("", artist, limit=limit) or []
+        except Exception:
+            pass
+
     if not results:
         t_first = (title or "").split()[0] if title else ""
         a_first = (artist or "").split()[0] if artist else ""
         if t_first or a_first:
-            try: results = sp.search_track(t_first, a_first, limit=limit) or []
-            except Exception: pass
+            try:
+                results = sp.search_track(t_first, a_first, limit=limit) or []
+            except Exception:
+                pass
+
     return results
 
 def resolve_favorite_to_artist(
@@ -249,6 +264,7 @@ def resolve_favorite_to_artist(
     candidates = _try_search_variants(sp, title, artist, limit=limit)
     best_item = None
     best_score = -1.0
+
     for tr in candidates:
         tr_title_clean = _clean(tr.get("name", ""))
         artists = tr.get("artists") or []
@@ -259,8 +275,10 @@ def resolve_favorite_to_artist(
         if score > best_score:
             best_score = score
             best_item = tr
+
     if best_item is None or best_score < accept_threshold:
         return None
+
     artists = best_item.get("artists") or []
     aid = artists[0].get("id") if artists else None
     adata = sp.get_artist(aid) if aid else {}
@@ -281,6 +299,7 @@ def recommend_from_favorites(
     sp = SpotifyClient(client_id, client_secret, market=market or "US")
     favorites = [(t.strip(), a.strip()) for (t, a) in favorites if t and a]
     fav_keys = {(t.lower(), a.lower()) for (t, a) in favorites}
+
     artist_infos: List[Tuple[str, str, List[str]]] = []
     for (title, artist) in favorites:
         try:
@@ -291,6 +310,7 @@ def recommend_from_favorites(
                     artist_infos.append((aid, aname, a_genres))
         except Exception:
             continue
+
     candidates: List[Tuple[str, str]] = []
     for (aid, _aname, _g) in artist_infos:
         try:
@@ -305,6 +325,7 @@ def recommend_from_favorites(
                 candidates.append((f"{tname} — {pa_name}", turl or ""))
         except Exception:
             continue
+
     seen, recs = set(), []
     for (text, url) in candidates:
         if text not in seen:
@@ -326,6 +347,182 @@ def build_recommendation_buckets(
 ) -> Dict[str, List[Tuple[str, str]]]:
     sp = SpotifyClient(client_id, client_secret, market=market or "US")
     favorites = [(t.strip(), a.strip()) for (t, a) in favorites if t and a]
+
     fav_artist_infos: List[Tuple[str, str, List[str]]] = []
     for (title, artist) in favorites:
         try:
+            resolved = resolve_favorite_to_artist(sp, title, artist, limit=10, accept_threshold=72.0)
+            if resolved:
+                aid, aname, a_genres = resolved
+                if aid:
+                    fav_artist_infos.append((aid, aname, a_genres))
+        except Exception:
+            continue
+
+    buckets: Dict[str, List[Tuple[str, str]]] = {
+        "Hidden gems from your favorite artists": [],
+        "Artists you should listen to": [],
+        "Rising stars in your genres": [],
+    }
+
+    # Hidden gems (low popularity top tracks)
+    for (aid, aname, _genres) in fav_artist_infos:
+        try:
+            top = sp.get_artist_top_tracks(aid, limit=10)
+            for tr in top:
+                tname = tr.get("name")
+                popularity = tr.get("popularity", 50)
+                artists = tr.get("artists") or []
+                pa_name = artists[0].get("name") if artists else aname
+                turl = (tr.get("external_urls") or {}).get("spotify", "")
+                if tname and turl and popularity <= track_pop_max:
+                    buckets["Hidden gems from your favorite artists"].append((f"{tname} — {pa_name}", turl))
+        except Exception:
+            continue
+
+    # Related artists (low popularity)
+    seen_artists = set()
+    for (aid, _aname, _genres) in fav_artist_infos:
+        try:
+            related = sp.get_related_artists(aid)
+            for ar in related:
+                name = ar.get("name")
+                pop = ar.get("popularity", 50)
+                url = (ar.get("external_urls") or {}).get("spotify", "")
+                if name and url and name not in seen_artists and pop <= artist_pop_max:
+                    seen_artists.add(name)
+                    buckets["Artists you should listen to"].append((name, url))
+        except Exception:
+            continue
+
+    # Rising stars: genre search (low popularity artists)
+    genre_pool = {g for (_aid, _aname, genres) in fav_artist_infos for g in (genres or [])}
+    seen_genre_artists = set()
+    for genre in list(genre_pool)[:3]:
+        try:
+            items = sp.search_artists_by_genre(genre, limit=20)
+            items = sorted(items, key=lambda x: x.get("popularity", 50))
+            for ar in items:
+                pop = ar.get("popularity", 50)
+                if pop > artist_pop_max:
+                    continue
+                name = ar.get("name")
+                url = (ar.get("external_urls") or {}).get("spotify", "")
+                if name and url and name not in seen_genre_artists:
+                    seen_genre_artists.add(name)
+                    buckets["Rising stars in your genres"].append((f"{name} ({genre})", url))
+        except Exception:
+            continue
+
+    # Trim to requested size
+    for k in buckets:
+        buckets[k] = buckets[k][:per_bucket]
+
+    return buckets
+
+# ---------- Sidebar / Inputs ----------
+with st.sidebar:
+    st.header("Settings")
+    market = st.text_input("Market (country code)", value="US", help="e.g., US, GB, KR, JP")
+    st.divider()
+    st.header("Mode")
+    mode = st.radio("Choose recommendation mode", ["Standard", "Niche"], index=0, horizontal=True)
+    if mode == "Niche":
+        st.divider()
+        st.header("Niche controls")
+        track_pop_max = st.slider("Max track popularity (hidden gems)", 0, 100, 35, help="Lower = more niche")
+        artist_pop_max = st.slider("Max artist popularity (artists/rising stars)", 0, 100, 45, help="Lower = more niche")
+        per_bucket = st.slider("Items per bucket", 1, 10, 5)
+
+col1, col2 = st.columns(2)
+with col1:
+    s1_title = st.text_input("Favorite #1 — Title", placeholder="e.g., Blinding Lights")
+with col2:
+    s1_artist = st.text_input("Favorite #1 — Artist", placeholder="e.g., The Weeknd")
+
+col1, col2 = st.columns(2)
+with col1:
+    s2_title = st.text_input("Favorite #2 — Title", placeholder="e.g., Yellow")
+with col2:
+    s2_artist = st.text_input("Favorite #2 — Artist", placeholder="e.g., Coldplay")
+
+col1, col2 = st.columns(2)
+with col1:
+    s3_title = st.text_input("Favorite #3 — Title", placeholder="e.g., Bad Guy")
+with col2:
+    s3_artist = st.text_input("Favorite #3 — Artist", placeholder="e.g., Billie Eilish")
+
+run = st.button("Recommend", type="primary")
+
+# ---------- Handlers ----------
+def _collect_favorites_with_feedback() -> list[tuple[str, str]]:
+    rows = [
+        ("Favorite #1", s1_title.strip(), s1_artist.strip()),
+        ("Favorite #2", s2_title.strip(), s2_artist.strip()),
+        ("Favorite #3", s3_title.strip(), s3_artist.strip()),
+    ]
+    valid = []
+    for label, t, a in rows:
+        if t and a:
+            valid.append((t, a))
+        elif t and not a:
+            st.warning(f"{label}: Title entered but Artist is missing.")
+        elif a and not t:
+            st.warning(f"{label}: Artist entered but Title is missing.")
+    return valid
+
+def _ensure_creds() -> bool:
+    if not CLIENT_ID or not CLIENT_SECRET:
+        st.error(
+            "No Spotify credentials found.\n\n"
+            "Add them to **Manage app → Settings → Secrets** in Streamlit Cloud using TOML:\n\n"
+            "```toml\nSPOTIFY_CLIENT_ID = \"your-client-id\"\nSPOTIFY_CLIENT_SECRET = \"your-client-secret\"\n```"
+        )
+        return False
+    return True
+
+if run:
+    if not _ensure_creds():
+        st.stop()
+
+    favorites = _collect_favorites_with_feedback()
+    if not favorites:
+        st.warning("Please enter at least one valid Title + Artist pair.")
+        st.stop()
+
+    if mode == "Standard":
+        with st.spinner("Fetching recommendations..."):
+            recs = recommend_from_favorites(CLIENT_ID, CLIENT_SECRET, market, favorites, max_recs=3)
+        st.subheader("Recommendations")
+        if not recs:
+            st.info("No compliant recommendations found—try different titles/artists.")
+        else:
+            for i, (text, url) in enumerate(recs, start=1):
+                st.write(f"**{i}. {text}**")
+                if url:
+                    link_button("Open in Spotify", url)
+    else:
+        track_pop = track_pop_max if mode == "Niche" else 35
+        artist_pop = artist_pop_max if mode == "Niche" else 45
+        per_bucket_val = per_bucket if mode == "Niche" else 5
+        with st.spinner("Fetching niche recommendations..."):
+            buckets = build_recommendation_buckets(
+                CLIENT_ID,
+                CLIENT_SECRET,
+                market,
+                favorites,
+                track_pop_max=track_pop,
+                artist_pop_max=artist_pop,
+                per_bucket=per_bucket_val,
+            )
+        st.subheader("Recommendations")
+        for title, items in buckets.items():
+            st.markdown(f"#### {title}")
+            if not items:
+                st.info("No items found—try raising the popularity thresholds or change favorites/market.")
+            else:
+                for text, url in items:
+                    st.write(f"- **{text}**")
+                    if url:
+                        link_button("Open in Spotify", url)
+            st.divider()
