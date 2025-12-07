@@ -1,6 +1,7 @@
 
 # app.py — single-file Streamlit app (Spotify-compliant)
-# Artist boxes are now dropdowns when a title is present (with "Other" manual override).
+# Patch: avoid writing to st.session_state for artist widget keys.
+# Artist boxes are dropdowns when a title is present (with "Other" manual override).
 # Keeps: genre-driven UI, rock 🎸 emoji, varied Standard & Niche, regenerate button, robust fallbacks.
 
 import os
@@ -440,16 +441,16 @@ def fetch_artist_suggestions_for_title(
             break
     return out
 
-def artist_select_or_input(label: str, title_key: str, artist_key: str, pick_key: str, market: str) -> str:
+def artist_select_or_input(label: str, title_key: str, manual_key: str, pick_key: str, market: str) -> str:
     """
     Render the Artist field as a dropdown when a Title is present:
     - Options: ["— choose —"] + suggestions + ["Other (type manually)"]
-    - If "Other..." chosen, show a small text input below for manual typing.
-    - If no suggestions, fall back to a normal text box.
-    The final chosen/typed value is stored in st.session_state[artist_key].
+    - If "Other..." chosen (or no suggestions), show a small text input below.
+    Returns the final chosen/typed artist string.
+    NOTE: This function does NOT write to st.session_state for the chosen value to avoid Widget state conflicts.
     """
-    current_artist = (st.session_state.get(artist_key, "") or "")
     title_val = (st.session_state.get(title_key, "") or "").strip()
+    current_manual = (st.session_state.get(manual_key, "") or "")
 
     if CLIENT_ID and CLIENT_SECRET and title_val:
         try:
@@ -459,10 +460,10 @@ def artist_select_or_input(label: str, title_key: str, artist_key: str, pick_key
 
         if opts:
             options = ["— choose —"] + opts + ["Other (type manually)"]
-            # Preselect current artist if it's in suggestions; else default to "— choose —"
+            # Preselect current if present
             pre_index = 0
-            if current_artist in opts:
-                pre_index = 1 + opts.index(current_artist)
+            if current_manual in opts:
+                pre_index = 1 + opts.index(current_manual)
             choice = st.selectbox(
                 label,
                 options,
@@ -471,22 +472,18 @@ def artist_select_or_input(label: str, title_key: str, artist_key: str, pick_key
                 help="Pick an artist for this title or choose 'Other' to type manually."
             )
             if choice and choice not in ("— choose —", "Other (type manually)"):
-                st.session_state[artist_key] = choice
                 return choice
-            # Manual entry if user wants something else
-            manual = st.text_input(f"{label} (type manually)", value=current_artist, key=artist_key+"_manual")
-            st.session_state[artist_key] = manual
+            # Manual entry
+            manual = st.text_input(f"{label} (type manually)", value=current_manual, key=manual_key)
             return manual
         else:
-            # No suggestions → simple text input
-            val = st.text_input(label, value=current_artist, key=artist_key)
-            st.session_state[artist_key] = val
-            return val
+            # No suggestions → simple text input (manual only)
+            manual = st.text_input(label, value=current_manual, key=manual_key)
+            return manual
     else:
-        # No title or no creds → simple text input
-        val = st.text_input(label, value=current_artist, key=artist_key)
-        st.session_state[artist_key] = val
-        return val
+        # No title or no creds → simple manual text input
+        manual = st.text_input(label, value=current_manual, key=manual_key)
+        return manual
 
 # =========================
 #  Recommendation logic (with regenerate support)
@@ -505,7 +502,7 @@ def recommend_from_favorites(
     market: str,
     favorites: List[Tuple[str, str]],
     max_recs: int = 3,
-    regen_nonce: int = 0,  # vary suggestions when user clicks "Regenerate"
+    regen_nonce: int = 0,
 ) -> List[Tuple[str, str]]:
     """
     STANDARD (varied) across ALL inputs:
@@ -652,7 +649,7 @@ def build_recommendation_buckets(
     track_pop_max: int = 35,
     per_bucket: int = 5,
     min_artists: int = 2,
-    regen_nonce: int = 0,  # allow variety on regenerate
+    regen_nonce: int = 0,
 ) -> Dict[str, List[Tuple[str, str]]]:
     """
     Returns buckets:
@@ -882,19 +879,19 @@ col1, col2 = st.columns(2)
 with col1:
     st.text_input("Favorite #1 — Title", key="s1_title", placeholder="e.g., Blinding Lights")
 with col2:
-    artist_select_or_input("Favorite #1 — Artist", "s1_title", "s1_artist", "s1_artist_pick", market)
+    s1_artist_val = artist_select_or_input("Favorite #1 — Artist", "s1_title", "s1_artist_manual", "s1_artist_pick", market)
 
 col1, col2 = st.columns(2)
 with col1:
     st.text_input("Favorite #2 — Title", key="s2_title", placeholder="e.g., Yellow")
 with col2:
-    artist_select_or_input("Favorite #2 — Artist", "s2_title", "s2_artist", "s2_artist_pick", market)
+    s2_artist_val = artist_select_or_input("Favorite #2 — Artist", "s2_title", "s2_artist_manual", "s2_artist_pick", market)
 
 col1, col2 = st.columns(2)
 with col1:
     st.text_input("Favorite #3 — Title", key="s3_title", placeholder="e.g., Bad Guy")
 with col2:
-    artist_select_or_input("Favorite #3 — Artist", "s3_title", "s3_artist", "s3_artist_pick", market)
+    s3_artist_val = artist_select_or_input("Favorite #3 — Artist", "s3_title", "s3_artist_manual", "s3_artist_pick", market)
 
 # Action buttons: Recommend + Regenerate
 if "regen_nonce" not in st.session_state:
@@ -920,11 +917,13 @@ def _ensure_creds() -> bool:
         return False
     return True
 
-def _collect_favorites_with_feedback() -> List[Tuple[str, str]]:
+def _collect_favorites_with_feedback(
+    s1_artist_val: str, s2_artist_val: str, s3_artist_val: str
+) -> List[Tuple[str, str]]:
     rows = [
-        ("Favorite #1", (st.session_state.get("s1_title","") or "").strip(), (st.session_state.get("s1_artist","") or "").strip()),
-        ("Favorite #2", (st.session_state.get("s2_title","") or "").strip(), (st.session_state.get("s2_artist","") or "").strip()),
-        ("Favorite #3", (st.session_state.get("s3_title","") or "").strip(), (st.session_state.get("s3_artist","") or "").strip()),
+        ("Favorite #1", (st.session_state.get("s1_title","") or "").strip(), (s1_artist_val or "").strip()),
+        ("Favorite #2", (st.session_state.get("s2_title","") or "").strip(), (s2_artist_val or "").strip()),
+        ("Favorite #3", (st.session_state.get("s3_title","") or "").strip(), (s3_artist_val or "").strip()),
     ]
     valid: List[Tuple[str, str]] = []
     for label, t, a in rows:
@@ -940,7 +939,7 @@ if run or regenerate:
     if not _ensure_creds():
         st.stop()
 
-    favorites = _collect_favorites_with_feedback()
+    favorites = _collect_favorites_with_feedback(s1_artist_val, s2_artist_val, s3_artist_val)
     if not favorites:
         st.warning("Please enter at least one valid Title + Artist pair.")
         st.stop()
@@ -954,7 +953,7 @@ if run or regenerate:
     # Context badges (artists + genres)
     icons = theme["icons"]
     st.markdown(f"**{icons['artist']} Inputs:** "
-                f"`{st.session_state.get('s1_artist') or '—'}` · `{st.session_state.get('s2_artist') or '—'}` · `{st.session_state.get('s3_artist') or '—'}`")
+                f"`{s1_artist_val or '—'}` · `{s2_artist_val or '—'}` · `{s3_artist_val or '—'}`")
     unique_genres = sorted(set([g.lower() for g in genres]))[:6] if genres else []
     if unique_genres:
         st.markdown("**🏷️ Detected genres:** " + " ".join(
