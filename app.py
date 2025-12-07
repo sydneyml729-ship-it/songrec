@@ -1,15 +1,14 @@
 
 # app.py — single-file Streamlit app (Spotify-compliant)
-# Features requested:
-# - No popularity filtering for artist recommendations.
-# - Recommend artists of all popularity levels, labeled as:
-#     • "Artists you may know" (pop >= 60)
-#     • "Discover" (pop < 60)
-# - 🔁 Regenerate button to vary suggestions.
+# Adds:
+# - "Songs from your genres (not your input artists)" tracks category.
+# - 🔁 Regenerate button.
+# - Artist categories without popularity filtering: "Artists you may know" (pop >= 60) & "Discover" (pop < 60).
+# Keeps:
 # - Fair interleaving across ALL inputs.
 # - Auto genre-driven background (no manual personalization).
 # - Standard mode mixes favorites’ top tracks + related artists’ top tracks (varied).
-# - Niche retains "Hidden gems from your favorite artists" tracks + artist categories above.
+# Endpoints: Search, Artist, Artist Top Tracks (requires market), Related Artists (Client Credentials).
 
 import os
 import time
@@ -564,15 +563,18 @@ def build_recommendation_buckets(
 ) -> Dict[str, List[Tuple[str, str]]]:
     """
     Returns buckets:
-      - "Hidden gems from your favorite artists" (tracks; still uses track_pop_max)
-      - "Artists you may know" (pop >= 60)
-      - "Discover" (pop < 60)
-      - "Rising stars in your genres" (informational; still guided by genres, not pop filtering)
-    NOTE: No artist popularity filtering—only labeling into buckets.
+      - "Hidden gems from your favorite artists" (tracks; uses track_pop_max)
+      - "Artists you may know" (pop >= 60) — no filtering, just labeling
+      - "Discover" (pop < 60) — no filtering, just labeling
+      - "Songs from your genres (not your input artists)" — tracks by genre-matched artists excluding inputs
+      - "Rising stars in your genres" — informational
     """
     sp = SpotifyClient(client_id, client_secret, market=market or "US")
     favorites = [(t.strip(), a.strip()) for (t, a) in favorites if t and a]
     rng = random.Random(regen_nonce or 0)
+
+    fav_keys = {(t.lower(), a.lower()) for (t, a) in favorites}
+    fav_artist_names_lower = {a.lower() for (_, a) in favorites}
 
     # Resolve all favorites robustly
     fav_artist_infos: List[Tuple[str, str, List[str]]] = []
@@ -582,11 +584,13 @@ def build_recommendation_buckets(
             aid, aname, a_genres = r
             if aid:
                 fav_artist_infos.append((aid, aname, a_genres or []))
+    fav_artist_ids = {aid for (aid, _, _) in fav_artist_infos}
 
     buckets: Dict[str, List[Tuple[str, str]]] = {
         "Hidden gems from your favorite artists": [],
         "Artists you may know": [],
         "Discover": [],
+        "Songs from your genres (not your input artists)": [],
         "Rising stars in your genres": [],
     }
 
@@ -661,13 +665,6 @@ def build_recommendation_buckets(
 
     # Label into two categories (no filtering)
     may_know, discover = [], []
-    for name, url, pop in related_all:
-        if pop >= 60:
-            may_know.append((name, url))
-        else:
-            discover.append((name, url))
-
-    # Dedupe & trim
     def _dedupe(items: List[Tuple[str,str]]) -> List[Tuple[str,str]]:
         out, seen = [], set()
         for n,u in items:
@@ -677,23 +674,72 @@ def build_recommendation_buckets(
                 out.append((n,u))
         return out
 
+    for name, url, pop in related_all:
+        if pop >= 60:
+            may_know.append((name, url))
+        else:
+            discover.append((name, url))
     may_know = _dedupe(may_know)[:max(2, per_bucket)]
     discover = _dedupe(discover)[:max(2, per_bucket)]
-
-    # Ensure we don't render empty categories
     if not (may_know or discover):
         may_know = [("Explore artists", "https://open.spotify.com/genre")]
 
     buckets["Artists you may know"] = may_know
     buckets["Discover"] = discover
 
-    # ---------- 3) Rising stars in your genres (informational) ----------
+    # ---------- 3) Songs from your genres (not your input artists) ----------
     genre_pool = {g for (_aid, _aname, genres) in fav_artist_infos for g in (genres or [])}
     if not genre_pool:
         genre_pool |= _backfill_genres_from_related(sp, fav_artist_infos)
     if not genre_pool:
         genre_pool = {"indie", "alternative", "singer-songwriter", "electronic", "hip hop", "afrobeats", "latin"}
 
+    per_genre_track_lists: List[List[Tuple[str, str]]] = []
+    for genre in list(genre_pool)[:3]:
+        lst: List[Tuple[str, str]] = []
+        try:
+            # Find artists by genre
+            artists_by_genre = sp.search_artists_by_genre(genre, limit=30)
+            rng.shuffle(artists_by_genre)
+            for ar in artists_by_genre:
+                aid = ar.get("id", "")
+                aname = ar.get("name", "")
+                if not aid or not aname:
+                    continue
+                # Exclude submitted favorites
+                if aid in fav_artist_ids or (aname.lower() in fav_artist_names_lower):
+                    continue
+                # Fetch a few top tracks for this genre-matched artist
+                try:
+                    top = sp.get_artist_top_tracks(aid, limit=5)
+                    if not top:
+                        sp_us = SpotifyClient(client_id, client_secret, market="US")
+                        top = sp_us.get_artist_top_tracks(aid, limit=5)
+                    rng.shuffle(top)
+                    for tr in top:
+                        _, tname, _, pa_name, turl = SpotifyClient.extract_track_core(tr)
+                        if not tname or not pa_name or not turl:
+                            continue
+                        # Exclude exact favorites (title+artist)
+                        key = (tname.strip().lower(), pa_name.strip().lower())
+                        if key in fav_keys:
+                            continue
+                        lst.append((f"{tname} — {pa_name}", turl))
+                        if len(lst) >= 8:  # keep each genre list modest
+                            break
+                except Exception:
+                    continue
+                if len(lst) >= 12:
+                    break
+        except Exception:
+            pass
+        per_genre_track_lists.append(lst)
+    genre_tracks_combined = _interleave_lists(per_genre_track_lists)
+    if not genre_tracks_combined:
+        genre_tracks_combined = [("Discover on Spotify", "https://open.spotify.com/explore")]
+    buckets["Songs from your genres (not your input artists)"] = genre_tracks_combined[:max(2, per_bucket)]
+
+    # ---------- 4) Rising stars in your genres (informational) ----------
     per_genre_lists = []
     for genre in list(genre_pool)[:3]:
         lst = []
@@ -846,7 +892,7 @@ if run or regenerate:
             if url:
                 link_button("Open in Spotify", url)
 
-    # --- Niche with new artist categories ---
+    # --- Niche with artist + track categories ---
     with tab_niche:
         with st.spinner("Fetching niche recommendations..."):
             buckets = build_recommendation_buckets(
@@ -888,6 +934,18 @@ if run or regenerate:
         items = buckets.get("Hidden gems from your favorite artists", [])
         if not items:
             items = [("Explore Spotify", "https://open.spotify.com/explore")]
+        for text, url in items:
+            st.write(f"- **{text}**")
+            if url:
+                link_button("Open in Spotify", url)
+
+        st.divider()
+
+        # NEW: Songs from your genres (not your input artists)
+        st.markdown("#### Songs from your genres (not your input artists)")
+        items = buckets.get("Songs from your genres (not your input artists)", [])
+        if not items:
+            items = [("Discover on Spotify", "https://open.spotify.com/explore")]
         for text, url in items:
             st.write(f"- **{text}**")
             if url:
