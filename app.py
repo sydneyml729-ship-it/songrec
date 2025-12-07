@@ -963,3 +963,43 @@ if run or regenerate:
             if url:
                 link_button("Open in Spotify", url)
         st.divider()
+
+
+def fetch_artist_suggestions_for_title(
+    client_id: str,
+    client_secret: str,
+    market: str,
+    title: str,
+    limit: int = 25
+) -> list[str]:
+    """Return up to `limit` unique artist names that have a track with `title` (case-insensitive)."""
+    title = (title or "").strip()
+    if not title:
+        return []
+
+    sp = SpotifyClient(client_id, client_secret, market=market or "US")
+    try:
+        # Pull a generous batch so we capture variants, remixes, live versions, etc.
+        items = sp.search_track(title, "", limit=50)  # /v1/search type=track — allowed by Client Credentials
+    except Exception:
+        return []
+
+    # Collect artist names across the matching tracks
+    names = []
+    for tr in items or []:
+        for ar in (tr.get("artists") or []):
+            name = (ar.get("name") or "").strip()
+            if name:
+                names.append(name)
+
+    # Unique (preserve order), cap length
+    seen, out = set(), []
+    for n in names:
+        key = n.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(n)
+        if len(out) >= limit:
+            break
+    return out
+
