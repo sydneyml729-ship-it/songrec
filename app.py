@@ -1,13 +1,7 @@
 
 # app.py — single-file Streamlit app (Spotify-compliant)
-# Features:
-# - Auto genre-driven background; uses 🎸 for any rock-related genre.
-# - Artist suggestions dropdowns under Artist inputs when Title is typed.
-# - 🔁 Regenerate button to vary suggestions without changing inputs.
-# - Standard (varied) recommendations interleave all inputs.
-# - Niche buckets: Artists you may know / Discover / Hidden gems (tracks) /
-#   Songs from your genres (not your input artists) / Rising stars in your genres.
-# - Robust fallbacks; only compliant endpoints (Client Credentials).
+# Artist boxes are now dropdowns when a title is present (with "Other" manual override).
+# Keeps: genre-driven UI, rock 🎸 emoji, varied Standard & Niche, regenerate button, robust fallbacks.
 
 import os
 import time
@@ -426,7 +420,7 @@ def fetch_artist_suggestions_for_title(
         return []
     sp = SpotifyClient(client_id, client_secret, market=market or "US")
     try:
-        items = sp.search_track(title, "", limit=50)
+        items = sp.search_track(title, "", limit=50)  # generous pull for better suggestions
     except Exception:
         return []
     names = []
@@ -435,16 +429,64 @@ def fetch_artist_suggestions_for_title(
             name = (ar.get("name") or "").strip()
             if name:
                 names.append(name)
-    # Unique in-order
+    # Unique, in-order, capped
     seen, out = set(), []
     for n in names:
-        key = n.lower()
-        if key not in seen:
-            seen.add(key)
+        k = n.lower()
+        if k not in seen:
+            seen.add(k)
             out.append(n)
         if len(out) >= limit:
             break
     return out
+
+def artist_select_or_input(label: str, title_key: str, artist_key: str, pick_key: str, market: str) -> str:
+    """
+    Render the Artist field as a dropdown when a Title is present:
+    - Options: ["— choose —"] + suggestions + ["Other (type manually)"]
+    - If "Other..." chosen, show a small text input below for manual typing.
+    - If no suggestions, fall back to a normal text box.
+    The final chosen/typed value is stored in st.session_state[artist_key].
+    """
+    current_artist = (st.session_state.get(artist_key, "") or "")
+    title_val = (st.session_state.get(title_key, "") or "").strip()
+
+    if CLIENT_ID and CLIENT_SECRET and title_val:
+        try:
+            opts = fetch_artist_suggestions_for_title(CLIENT_ID, CLIENT_SECRET, market, title_val, limit=25)
+        except Exception:
+            opts = []
+
+        if opts:
+            options = ["— choose —"] + opts + ["Other (type manually)"]
+            # Preselect current artist if it's in suggestions; else default to "— choose —"
+            pre_index = 0
+            if current_artist in opts:
+                pre_index = 1 + opts.index(current_artist)
+            choice = st.selectbox(
+                label,
+                options,
+                index=pre_index,
+                key=pick_key,
+                help="Pick an artist for this title or choose 'Other' to type manually."
+            )
+            if choice and choice not in ("— choose —", "Other (type manually)"):
+                st.session_state[artist_key] = choice
+                return choice
+            # Manual entry if user wants something else
+            manual = st.text_input(f"{label} (type manually)", value=current_artist, key=artist_key+"_manual")
+            st.session_state[artist_key] = manual
+            return manual
+        else:
+            # No suggestions → simple text input
+            val = st.text_input(label, value=current_artist, key=artist_key)
+            st.session_state[artist_key] = val
+            return val
+    else:
+        # No title or no creds → simple text input
+        val = st.text_input(label, value=current_artist, key=artist_key)
+        st.session_state[artist_key] = val
+        return val
 
 # =========================
 #  Recommendation logic (with regenerate support)
@@ -615,8 +657,8 @@ def build_recommendation_buckets(
     """
     Returns buckets:
       - "Hidden gems from your favorite artists" (tracks; uses track_pop_max)
-      - "Artists you may know" (pop >= 60) — no filtering, just labeling
-      - "Discover" (pop < 60) — no filtering, just labeling
+      - "Artists you may know" (pop >= 60) — labeling only
+      - "Discover" (pop < 60) — labeling only
       - "Songs from your genres (not your input artists)" — tracks by genre-matched artists excluding inputs
       - "Rising stars in your genres" — informational
     """
@@ -824,7 +866,7 @@ def collect_genres_for_favorites(
     return genre_pool
 
 # =========================
-#  Sidebar / Inputs (with suggestions)
+#  Sidebar / Inputs (Artist boxes ARE the dropdowns)
 # =========================
 with st.sidebar:
     st.header("Settings")
@@ -835,54 +877,24 @@ with st.sidebar:
         per_bucket = st.slider("Items per bucket", 1, 10, 5)
         min_artists = st.slider("Minimum artists per bucket (guaranteed)", 0, 5, 2)
 
-# Inputs with artist suggestions
+# Titles & Artists (artist field switches to dropdown when title present)
 col1, col2 = st.columns(2)
 with col1:
-    s1_title = st.text_input("Favorite #1 — Title", key="s1_title", placeholder="e.g., Blinding Lights")
+    st.text_input("Favorite #1 — Title", key="s1_title", placeholder="e.g., Blinding Lights")
 with col2:
-    s1_artist = st.text_input("Favorite #1 — Artist", key="s1_artist", placeholder="e.g., The Weeknd")
-
-if CLIENT_ID and CLIENT_SECRET and (st.session_state.get("s1_title", "").strip()):
-    try:
-        _s1_opts = fetch_artist_suggestions_for_title(CLIENT_ID, CLIENT_SECRET, market, st.session_state["s1_title"], limit=25)
-    except Exception:
-        _s1_opts = []
-    if _s1_opts:
-        pick1 = st.selectbox("Artists with this title", ["— choose —"] + _s1_opts, index=0, key="s1_artist_pick", help="Select to auto-fill the artist")
-        if pick1 and pick1 != "— choose —":
-            st.session_state["s1_artist"] = pick1
+    artist_select_or_input("Favorite #1 — Artist", "s1_title", "s1_artist", "s1_artist_pick", market)
 
 col1, col2 = st.columns(2)
 with col1:
-    s2_title = st.text_input("Favorite #2 — Title", key="s2_title", placeholder="e.g., Yellow")
+    st.text_input("Favorite #2 — Title", key="s2_title", placeholder="e.g., Yellow")
 with col2:
-    s2_artist = st.text_input("Favorite #2 — Artist", key="s2_artist", placeholder="e.g., Coldplay")
-
-if CLIENT_ID and CLIENT_SECRET and (st.session_state.get("s2_title", "").strip()):
-    try:
-        _s2_opts = fetch_artist_suggestions_for_title(CLIENT_ID, CLIENT_SECRET, market, st.session_state["s2_title"], limit=25)
-    except Exception:
-        _s2_opts = []
-    if _s2_opts:
-        pick2 = st.selectbox("Artists with this title", ["— choose —"] + _s2_opts, index=0, key="s2_artist_pick", help="Select to auto-fill the artist")
-        if pick2 and pick2 != "— choose —":
-            st.session_state["s2_artist"] = pick2
+    artist_select_or_input("Favorite #2 — Artist", "s2_title", "s2_artist", "s2_artist_pick", market)
 
 col1, col2 = st.columns(2)
 with col1:
-    s3_title = st.text_input("Favorite #3 — Title", key="s3_title", placeholder="e.g., Bad Guy")
+    st.text_input("Favorite #3 — Title", key="s3_title", placeholder="e.g., Bad Guy")
 with col2:
-    s3_artist = st.text_input("Favorite #3 — Artist", key="s3_artist", placeholder="e.g., Billie Eilish")
-
-if CLIENT_ID and CLIENT_SECRET and (st.session_state.get("s3_title", "").strip()):
-    try:
-        _s3_opts = fetch_artist_suggestions_for_title(CLIENT_ID, CLIENT_SECRET, market, st.session_state["s3_title"], limit=25)
-    except Exception:
-        _s3_opts = []
-    if _s3_opts:
-        pick3 = st.selectbox("Artists with this title", ["— choose —"] + _s3_opts, index=0, key="s3_artist_pick", help="Select to auto-fill the artist")
-        if pick3 and pick3 != "— choose —":
-            st.session_state["s3_artist"] = pick3
+    artist_select_or_input("Favorite #3 — Artist", "s3_title", "s3_artist", "s3_artist_pick", market)
 
 # Action buttons: Recommend + Regenerate
 if "regen_nonce" not in st.session_state:
