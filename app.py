@@ -698,3 +698,14 @@ if run:
                     if url:
                         link_button("Open in Spotify", url)
             st.divider()
+
+with st.expander("🎨 Personalization", expanded=False):
+    # Let user override the theme image with either a URL or file upload
+    use_bg_override = st.checkbox("Use custom background", value=False)
+    bg_url = st.text_input("Background image URL (optional)", value="")
+    bg_upload = st.file_uploader("Upload background image (optional)", type=["jpg", "jpeg", "png"])
+    # Accent override
+    custom_accent = st.color_picker("Accent color override", value="#000000")  # #000000 means "no override"
+    # Icon pack style (emoji)
+    icon_style = st.selectbox("Icon style", ["Default", "Minimal", "Playful", "Classic"])
+
