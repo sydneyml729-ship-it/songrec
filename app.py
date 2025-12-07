@@ -1,8 +1,8 @@
 
 # app.py — single-file Streamlit app (Spotify-compliant)
-# Patch: robust, safe rendering for empty/malformed items; use Markdown links for fallbacks.
+# Adds back direct Spotify link buttons safely; robust rendering in all sections.
 # Artist boxes are dropdowns when a title is present (with "Other" manual override).
-# Keeps: genre-driven UI, rock 🎸 emoji, varied Standard & Niche, regenerate button, robust fallbacks.
+# Keeps: genre-driven UI, rock 🎸 emoji, varied Standard & Niche, regenerate, robust fallbacks.
 
 import os
 import time
@@ -25,7 +25,7 @@ import streamlit as st
 # =========================
 st.set_page_config(page_title="Song Recommendation (Spotify)", page_icon="🎵")
 st.markdown("## 🎵 Song Recommendations")
-st.caption("Each item includes an 'Open in Spotify' link for attribution.")
+st.caption("Each item includes an 'Open in Spotify' button for attribution.")
 st.caption("Tip: typos are okay — we’ll fuzzy‑match your Title and Artist.")
 
 # =========================
@@ -37,6 +37,23 @@ def _get_secret(name: str) -> str:
 
 CLIENT_ID = _get_secret("SPOTIFY_CLIENT_ID")
 CLIENT_SECRET = _get_secret("SPOTIFY_CLIENT_SECRET")
+
+def link_button(label: str, url: str):
+    """
+    Safe link button:
+      - Use st.link_button when available and URL non-empty.
+      - Fallback to Markdown anchor if st.link_button isn’t available.
+    """
+    try:
+        if url:
+            st.link_button(label, url)
+        else:
+            st.write(label)
+    except Exception:
+        if url:
+            st.markdown(f"{label}")
+        else:
+            st.write(label)
 
 # =========================
 #  Genre Themes (gradient & optional image)
@@ -342,7 +359,6 @@ def resolve_artist_robust(sp: SpotifyClient, title: str, artist: str) -> Optiona
     try:
         r = resolve_favorite_to_artist(sp, title, artist, limit=10, accept_threshold=72.0)
         if r: return r
-        # Direct artist search by name
         if artist:
             items = sp.search_artist_by_name(artist, limit=3)
             if items:
@@ -350,7 +366,6 @@ def resolve_artist_robust(sp: SpotifyClient, title: str, artist: str) -> Optiona
                 aid = a.get("id", "")
                 adata = sp.get_artist(aid) if aid else {}
                 return (aid, adata.get("name", a.get("name","")), adata.get("genres", []) or [])
-        # Track-only fallback to get primary artist
         if title and not artist:
             items = sp.search_track(title, "", limit=3)
             if items:
@@ -428,7 +443,7 @@ def artist_select_or_input(label: str, title_key: str, manual_key: str, pick_key
         return manual
 
 # =========================
-#  Rendering helpers (SAFE)
+#  Rendering helpers (SAFE + link buttons)
 # =========================
 def _sanitize_items(items: List) -> List[Tuple[str, str]]:
     """Ensure items are a list of (text, url) tuples; drop malformed entries."""
@@ -463,13 +478,13 @@ def render_items_section(
     if not safe_items:
         st.info(fallback_text)
         if fallback_link_url:
-            st.markdown(f"{fallback_link_text}")
+            link_button(fallback_link_text, fallback_link_url)
         st.divider()
         return
     for text, url in safe_items:
         st.write(f"- **{text}**")
         if url:
-            st.markdown(f"Open in Spotify")
+            link_button("Open in Spotify", url)
     st.divider()
 
 # =========================
