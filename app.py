@@ -1,8 +1,13 @@
 
 # app.py — single-file Streamlit app (Spotify-compliant)
-# Adds back direct Spotify link buttons safely; robust rendering in all sections.
-# Artist boxes are dropdowns when a title is present (with "Other" manual override).
-# Keeps: genre-driven UI, rock 🎸 emoji, varied Standard & Niche, regenerate, robust fallbacks.
+# Features:
+# - Artist inputs become dropdowns when titles are present (with "Other" manual override).
+# - Direct Spotify link buttons (safe fallback to Markdown links).
+# - Auto genre-driven background; 🎸 emoji for any rock-related genre.
+# - Standard (varied) recs + 🔁 Regenerate.
+# - Niche buckets: Artists you may know / Discover (min 2 guaranteed) / Hidden gems (tracks) /
+#   Songs from your genres (not your input artists) / Rising stars (informational).
+# - Safe rendering & robust fallbacks. Client Credentials only (Search/Artist/Top Tracks/Related).
 
 import os
 import time
@@ -63,7 +68,7 @@ GENRE_THEMES = {
                    "image": "assets/bg_pop.jpg",        "emoji": "✨", "font": "system-ui"},
     "rock":       {"accent": "#FF3B3B", "gradient": "linear-gradient(135deg,#3f3f3f 0%,#0f0f0f 100%)",
                    "image": "assets/bg_rock.jpg",       "emoji": "🎸", "font": "system-ui"},
-    "hip hop":    {"accent": "#FDBA3B", "gradient": "linear-gradient(135deg,#0e0e0e 0%,#1a1a1a 100%)",
+    "hip hop":    {"accent": "#FDBA3B", "gradient": "linear-gradient(135deg,#0e0e0e 0%,#1a1a 100%)",
                    "image": "assets/bg_hiphop.jpg",     "emoji": "🧢", "font": "system-ui"},
     "indie":      {"accent": "#66D9A3", "gradient": "linear-gradient(135deg,#94e3bf 0%,#e8fff4 100%)",
                    "image": "assets/bg_indie.jpg",      "emoji": "🍃", "font": "system-ui"},
@@ -135,6 +140,7 @@ def build_css_theme(primary: dict, secondary: dict | None = None) -> dict:
     return {"css": css, "emoji": primary.get("emoji", "🎵"), "accent": accent, "icons": icon_set}
 
 def _normalize_genre_label(g: str) -> str:
+    """Canonical labels for theme mapping; treat anything containing 'rock' as 'rock'."""
     g_norm = (g or "").lower().strip()
     if "hip hop" in g_norm or "hip-hop" in g_norm or "rap" in g_norm:
         return "hip hop"
@@ -412,15 +418,25 @@ def fetch_artist_suggestions_for_title(
     return out
 
 def artist_select_or_input(label: str, title_key: str, manual_key: str, pick_key: str, market: str) -> str:
+    """
+    Render the Artist field as a dropdown when a Title is present:
+    - Options: ["— choose —"] + suggestions + ["Other (type manually)"]
+    - If "Other..." chosen (or no suggestions), show a small text input below.
+    Returns the final chosen/typed artist string.
+    NOTE: This function does NOT write to st.session_state for the chosen value to avoid Widget state conflicts.
+    """
     title_val = (st.session_state.get(title_key, "") or "").strip()
     current_manual = (st.session_state.get(manual_key, "") or "")
+
     if CLIENT_ID and CLIENT_SECRET and title_val:
         try:
             opts = fetch_artist_suggestions_for_title(CLIENT_ID, CLIENT_SECRET, market, title_val, limit=25)
         except Exception:
             opts = []
+
         if opts:
             options = ["— choose —"] + opts + ["Other (type manually)"]
+            # Preselect current if present
             pre_index = 0
             if current_manual in opts:
                 pre_index = 1 + opts.index(current_manual)
@@ -433,12 +449,15 @@ def artist_select_or_input(label: str, title_key: str, manual_key: str, pick_key
             )
             if choice and choice not in ("— choose —", "Other (type manually)"):
                 return choice
+            # Manual entry
             manual = st.text_input(f"{label} (type manually)", value=current_manual, key=manual_key)
             return manual
         else:
+            # No suggestions → simple text input (manual only)
             manual = st.text_input(label, value=current_manual, key=manual_key)
             return manual
     else:
+        # No title or no creds → simple manual text input
         manual = st.text_input(label, value=current_manual, key=manual_key)
         return manual
 
@@ -636,6 +655,8 @@ def build_recommendation_buckets(
     rng = random.Random(regen_nonce or 0)
     fav_keys = {(t.lower(), a.lower()) for (t, a) in favorites}
     fav_artist_names_lower = {a.lower() for (_, a) in favorites}
+
+    # Resolve favorites
     fav_artist_infos: List[Tuple[str, str, List[str]]] = []
     for (title, artist) in favorites:
         r = resolve_artist_robust(sp, title, artist)
@@ -644,6 +665,7 @@ def build_recommendation_buckets(
             if aid:
                 fav_artist_infos.append((aid, aname, a_genres or []))
     fav_artist_ids = {aid for (aid, _, _) in fav_artist_infos}
+
     buckets: Dict[str, List[Tuple[str, str]]] = {
         "Hidden gems from your favorite artists": [],
         "Artists you may know": [],
@@ -651,7 +673,8 @@ def build_recommendation_buckets(
         "Songs from your genres (not your input artists)": [],
         "Rising stars in your genres": [],
     }
-    # 1) Hidden gems (tracks)
+
+    # ---------- 1) Hidden gems (tracks) ----------
     per_artist_hidden: List[List[Tuple[str, str]]] = []
     for (aid, aname, _genres) in fav_artist_infos:
         lst: List[Tuple[str, str]] = []
@@ -684,9 +707,11 @@ def build_recommendation_buckets(
     if not hidden_combined:
         hidden_combined = [("Explore Spotify", "https://open.spotify.com/explore")]
     buckets["Hidden gems from your favorite artists"] = hidden_combined[:max(2, per_bucket)]
-    # 2) Recommended artists (label only)
+
+    # ---------- 2) Recommended artists (label only, with min-2 Discover) ----------
     def _artist_url(ar: Dict) -> str:
         return (ar.get("external_urls") or {}).get("spotify") or (f"https://open.spotify.com/artist/{ar.get('id','')}" if ar.get("id") else "")
+
     related_all: List[Tuple[str, str, int]] = []
     for (aid, _aname, _genres) in fav_artist_infos:
         try:
@@ -700,21 +725,25 @@ def build_recommendation_buckets(
                     related_all.append((name, url, pop))
         except Exception:
             continue
+
+    # If thin, backfill from union genres (no pop filtering; just labeling later)
     if len(related_all) < min_artists:
         union_genres = {g for (_aid,_aname,gs) in fav_artist_infos for g in (gs or [])}
         if not union_genres:
             union_genres = {"indie","electronic","hip hop","pop","latin"}
         for g in list(union_genres)[:5]:
             try:
-                items = sp.search_artists_by_genre(g, limit=20)
+                items = sp.search_artists_by_genre(g, limit=30)
                 rng.shuffle(items)
-                for ar in items[:8]:
+                for ar in items[:10]:
                     name = ar.get("name",""); pop = ar.get("popularity",50)
                     url = _artist_url(ar)
                     if name and url:
                         related_all.append((name, url, pop))
             except Exception:
                 continue
+
+    # Label into categories
     may_know, discover = [], []
     def _dedupe(items: List[Tuple[str,str]]) -> List[Tuple[str,str]]:
         out, seen = [], set()
@@ -724,21 +753,61 @@ def build_recommendation_buckets(
                 seen.add(k)
                 out.append((n,u))
         return out
+
     for name, url, pop in related_all:
         if pop >= 60: may_know.append((name, url))
-        else: discover.append((name, url))
-    may_know = _dedupe(may_know)[:max(2, per_bucket)]
-    discover = _dedupe(discover)[:max(2, per_bucket)]
+        else:         discover.append((name, url))
+
+    # De-duplicate initial sets
+    may_know = _dedupe(may_know)
+    discover = _dedupe(discover)
+
+    # --- Guarantee at least two "Discover" items ---
+    def _ensure_min_discover(min_count: int = 2) -> None:
+        if len(discover) >= min_count:
+            return
+        exclude_names = {a.lower() for (_, a) in favorites} | {n.lower() for (n, _) in discover} | {n.lower() for (n, _) in may_know}
+        union_genres = {g for (_aid,_aname,gs) in fav_artist_infos for g in (gs or [])}
+        if not union_genres:
+            union_genres = {"indie","electronic","hip hop","pop","latin"}
+        for g in list(union_genres)[:5]:
+            try:
+                items = sp.search_artists_by_genre(g, limit=50)
+                rng.shuffle(items)
+                for ar in items:
+                    name = (ar.get("name") or "").strip()
+                    url = _artist_url(ar)
+                    if not name or not url:
+                        continue
+                    if name.lower() in exclude_names:
+                        continue
+                    discover.append((name, url))
+                    exclude_names.add(name.lower())
+                    if len(discover) >= min_count:
+                        return
+            except Exception:
+                continue
+
+    _ensure_min_discover(min_count=2)
+
+    # Final trim per bucket settings
+    may_know = may_know[:max(2, per_bucket)]
+    discover = discover[:max(2, per_bucket)]
+
+    # If absolutely empty (extreme edge), add a single explore link to avoid blanks
     if not (may_know or discover):
         may_know = [("Explore artists", "https://open.spotify.com/genre")]
+
     buckets["Artists you may know"] = may_know
     buckets["Discover"] = discover
-    # 3) Songs from your genres (not your input artists)
+
+    # ---------- 3) Songs from your genres (not your input artists) ----------
     genre_pool = {g for (_aid, _aname, genres) in fav_artist_infos for g in (genres or [])}
     if not genre_pool:
         genre_pool |= _backfill_genres_from_related(sp, fav_artist_infos)
     if not genre_pool:
         genre_pool = {"indie", "alternative", "singer-songwriter", "electronic", "hip hop", "afrobeats", "latin"}
+
     per_genre_track_lists: List[List[Tuple[str, str]]] = []
     for genre in list(genre_pool)[:3]:
         lst: List[Tuple[str, str]] = []
@@ -779,7 +848,8 @@ def build_recommendation_buckets(
     if not genre_tracks_combined:
         genre_tracks_combined = [("Discover on Spotify", "https://open.spotify.com/explore")]
     buckets["Songs from your genres (not your input artists)"] = genre_tracks_combined[:max(2, per_bucket)]
-    # 4) Rising stars in your genres
+
+    # ---------- 4) Rising stars in your genres ----------
     per_genre_lists = []
     for genre in list(genre_pool)[:3]:
         lst = []
@@ -798,6 +868,7 @@ def build_recommendation_buckets(
     if not rising_combined:
         rising_combined = [("Discover on Spotify", "https://open.spotify.com/explore")]
     buckets["Rising stars in your genres"] = rising_combined[:max(per_bucket, min_artists)]
+
     return buckets
 
 def collect_genres_for_favorites(
