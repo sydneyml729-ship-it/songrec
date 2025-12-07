@@ -526,3 +526,33 @@ if run:
                     if url:
                         link_button("Open in Spotify", url)
             st.divider()
+
+def _interleave_lists(lists):
+    """
+    Interleave multiple lists in round-robin order: [a1,a2,...], [b1,b2,...] -> a1,b1,a2,b2,...
+    """
+    out = []
+    # Find the longest list length
+    max_len = max((len(lst) for lst in lists), default=0)
+    for i in range(max_len):
+        for lst in lists:
+            if i < len(lst):
+                out.append(lst[i])
+    return out
+
+def _backfill_genres_from_related(sp: 'SpotifyClient', fav_artist_infos):
+    """
+    If favorites have sparse genres, pull genres from each favorite's related artists as backfill.
+    """
+    genres = set()
+    for (aid, _aname, _g) in fav_artist_infos:
+        try:
+            related = sp.get_related_artists(aid)
+            for ar in related:
+                for g in (ar.get("genres") or []):
+                    if g:
+                        genres.add(g)
+        except Exception:
+            continue
+    return genres
+
