@@ -1,10 +1,10 @@
 
 # app.py — single-file Streamlit app (Spotify-compliant)
-# Fixes: robust fallbacks to avoid "No items found" in all sections; fair interleaving across ALL inputs.
+# Fixes: robust fallbacks so "Artists you should listen to" never ends empty.
 # Features:
-# - Standard recommendations vary (favorites + related artists' top tracks), stably shuffled per day.
-# - Niche mode with min-2 artist guarantee and strong fallbacks.
-# - Automatic genre-driven UI (no manual personalization).
+# - Standard (varied): favorites' top tracks + related artists' top tracks, interleaved & stably shuffled.
+# - Niche: min-2 artist guarantee, strong per-favorite + global fallbacks.
+# - Auto genre-driven UI (no manual personalization).
 
 import os
 import time
@@ -89,7 +89,7 @@ def _interleave_lists(lists: List[List[Tuple[str, str]]]) -> List[Tuple[str, str
     return out
 
 def build_css_theme(primary: dict, secondary: dict | None = None) -> dict:
-    """Build CSS for Streamlit app based on genre theme(s)."""
+    """Build CSS string for Streamlit app based on genre theme(s)."""
     gradient = primary["gradient"] if not secondary else (
         f"linear-gradient(135deg,{primary['accent']}55 0%,{secondary['accent']}55 100%), {primary['gradient']}"
     )
@@ -438,6 +438,9 @@ def recommend_from_favorites(
                 rows = sp.search_artists_by_genre(g, limit=10)
                 for ar in rows[:3]:
                     name = ar.get("name"); url = (ar.get("external_urls") or {}).get("spotify","")
+                    if not url:
+                        aid = ar.get("id","")
+                        url = f"https://open.spotify.com/artist/{aid}" if aid else ""
                     if name and url: mixed.append((f"{name} ({g})", url))
             except Exception:
                 continue
@@ -449,7 +452,7 @@ def recommend_from_favorites(
         lst: List[Tuple[str, str]] = []
         try:
             top = sp.get_artist_top_tracks(aid, limit=10)
-            # US fallback if empty for regional reasons
+            # US fallback if empty
             if not top:
                 sp_us = SpotifyClient(client_id, client_secret, market="US")
                 top = sp_us.get_artist_top_tracks(aid, limit=10)
@@ -465,33 +468,36 @@ def recommend_from_favorites(
             pass
         per_artist_fav.append(lst)
 
-    # Per-artist related artists' top tracks (favor less popular; cap calls)
+    # Per-artist related artists' top tracks
     per_artist_related: List[List[Tuple[str, str]]] = []
     for (aid, _aname, _g) in artist_infos:
         lst: List[Tuple[str, str]] = []
         try:
             related = sp.get_related_artists(aid) or []
-            related_sorted = sorted(related, key=lambda x: x.get("popularity", 50))
-            pick = related_sorted[:3] if related_sorted else []
-            # If still nothing, grab a few regardless of popularity
-            if not pick and related:
-                pick = related[:3]
-            for ar in pick:
+            # Sort ascending popularity; pick up to 3
+            related_sorted = sorted(related, key=lambda x: x.get("popularity", 50))[:3] if related else []
+            if not related_sorted and related:
+                related_sorted = related[:3]
+            for ar in related_sorted:
                 rid = ar.get("id"); rname = ar.get("name")
                 if not rid or not rname: continue
+                url_artist = (ar.get("external_urls") or {}).get("spotify") or f"https://open.spotify.com/artist/{rid}"
+                # fetch a few top tracks to present as song recommendations (variety)
                 try:
                     rtop = sp.get_artist_top_tracks(rid, limit=5)
                     if not rtop:
                         sp_us = SpotifyClient(client_id, client_secret, market="US")
                         rtop = sp_us.get_artist_top_tracks(rid, limit=5)
+                    # if no track objects, still recommend the artist page
+                    if not rtop:
+                        lst.append((rname, url_artist))
                     for tr in rtop:
                         _, tname, _, pa_name, turl = SpotifyClient.extract_track_core(tr)
                         if not tname or not pa_name: continue
-                        key = (tname.strip().lower(), pa_name.strip().lower())
-                        if key in fav_keys: continue
                         lst.append((f"{tname} — {pa_name}", turl or ""))
                 except Exception:
-                    continue
+                    # fallback: just recommend the artist
+                    lst.append((rname, url_artist))
         except Exception:
             pass
         per_artist_related.append(lst)
@@ -500,7 +506,7 @@ def recommend_from_favorites(
     fav_combined = _interleave_lists(per_artist_fav)
     rel_combined = _interleave_lists(per_artist_related)
 
-    # Mix favorite and related results: alternate chunks to avoid dominance
+    # Mix favorite and related results
     mixed: List[Tuple[str, str]] = []
     i_f, i_r = 0, 0
     while i_f < len(fav_combined) or i_r < len(rel_combined):
@@ -509,18 +515,20 @@ def recommend_from_favorites(
         if i_r < len(rel_combined):
             mixed.append(rel_combined[i_r]); i_r += 1
 
-    # If still sparse, backfill with genre search
+    # Backfill with genre search if still sparse
     if not mixed:
         for g in ["indie", "electronic", "hip hop", "latin", "pop"]:
             try:
                 rows = sp.search_artists_by_genre(g, limit=10)
                 for ar in rows[:2]:
-                    name = ar.get("name"); url = (ar.get("external_urls") or {}).get("spotify","")
+                    name = ar.get("name")
+                    aid = ar.get("id","")
+                    url = (ar.get("external_urls") or {}).get("spotify") or (f"https://open.spotify.com/artist/{aid}" if aid else "")
                     if name and url: mixed.append((f"{name} ({g})", url))
             except Exception:
                 continue
 
-    # Stable shuffle by (date + market + concatenated favorites)
+    # Stable shuffle by date + market + inputs
     date_key = datetime.utcnow().strftime("%Y%m%d")
     salt = f"{market}|{date_key}|{'|'.join([t+'—'+a for (t,a) in favorites])}"
     mixed_shuffled = _stable_shuffle(mixed, salt)
@@ -577,13 +585,13 @@ def build_recommendation_buckets(
         "Rising stars in your genres": [],
     }
 
-    # 1) Hidden gems (low-pop top tracks) — interleave per favorite; fallbacks if empty
+    # ---------- 1) Hidden gems ----------
     per_artist_hidden: List[List[Tuple[str, str]]] = []
     for (aid, aname, _genres) in fav_artist_infos:
         lst: List[Tuple[str, str]] = []
         try:
             top = sp.get_artist_top_tracks(aid, limit=10)
-            # US fallback if empty for regional reasons
+            # US fallback if empty
             if not top:
                 sp_us = SpotifyClient(client_id, client_secret, market="US")
                 top = sp_us.get_artist_top_tracks(aid, limit=10)
@@ -595,7 +603,7 @@ def build_recommendation_buckets(
                 turl = (tr.get("external_urls") or {}).get("spotify", "")
                 if tname and turl and popularity <= track_pop_max:
                     lst.append((f"{tname} — {pa_name}", turl))
-            # If list is still empty for this artist, relax popularity cap to 80 and include any
+            # Relax if still empty for this artist
             if not lst:
                 for tr in top[:10]:
                     tname = tr.get("name")
@@ -609,39 +617,79 @@ def build_recommendation_buckets(
         per_artist_hidden.append(lst)
     hidden_combined = _interleave_lists(per_artist_hidden)
     if not hidden_combined:
-        # Final backfill: use genre search for a couple tracks by popular artists (links)
+        # Global backfill
         try:
             rows = sp.search_artists_by_genre("indie", limit=10)
             for ar in rows[:3]:
-                name = ar.get("name"); url = (ar.get("external_urls") or {}).get("spotify","")
+                name = ar.get("name"); aid = ar.get("id","")
+                url = (ar.get("external_urls") or {}).get("spotify") or (f"https://open.spotify.com/artist/{aid}" if aid else "")
                 if name and url: hidden_combined.append((f"{name} — top tracks", url))
         except Exception:
             pass
     buckets["Hidden gems from your favorite artists"] = hidden_combined[:max(2, per_bucket)]
 
-    # 2) Artists you should listen to (Related Artists) — interleave & guarantee min_artists with relax
-    def related_interleaved(pop_cap: int) -> List[Tuple[str, str]]:
+    # ---------- 2) Artists you should listen to ----------
+    # Helper: build usable URL even if external_urls.spotify is missing
+    def _artist_url(ar: Dict) -> str:
+        return (ar.get("external_urls") or {}).get("spotify") or (f"https://open.spotify.com/artist/{ar.get('id','')}" if ar.get("id") else "")
+
+    # Helper: genre-similar artists for a given favorite (fallback if related empty)
+    def _genre_similar_for_favorite(genres: List[str], exclude_names: set, cap: int = 100, per_genre: int = 5) -> List[Tuple[str,str]]:
+        out: List[Tuple[str,str]] = []
+        gs = genres[:] if genres else []
+        if not gs:
+            gs = ["indie", "electronic", "hip hop", "pop", "latin"]  # broad defaults
+        used = set()
+        for g in gs[:3]:
+            try:
+                items = sp.search_artists_by_genre(g, limit=20)
+                items = sorted(items, key=lambda x: x.get("popularity", 50))
+                for ar in items:
+                    name = ar.get("name","")
+                    pop = ar.get("popularity", 50)
+                    if not name or name.lower() in exclude_names or name.lower() in used: 
+                        continue
+                    if pop <= cap:
+                        url = _artist_url(ar)
+                        if url:
+                            out.append((name, url))
+                            used.add(name.lower())
+                            if len([x for x in out if g in x[0].lower()]) >= per_genre:
+                                break
+            except Exception:
+                continue
+        return out
+
+    def related_interleaved_with_fallback(pop_cap: int) -> List[Tuple[str, str]]:
         per_aid_lists = []
-        for (aid, _aname, _genres) in fav_artist_infos:
+        # Build per-favorite list with robust fallback to genre-similar if related is thin
+        for (aid, aname, a_genres) in fav_artist_infos:
             lst = []
             try:
                 related = sp.get_related_artists(aid) or []
-                # Sort ascending popularity, then include under cap
+                # Filter under cap; if empty, include first two regardless
+                base: List[Tuple[str,str]] = []
                 for ar in sorted(related, key=lambda x: x.get("popularity", 50)):
-                    name = ar.get("name"); pop = ar.get("popularity", 50)
-                    url = (ar.get("external_urls") or {}).get("spotify", "")
+                    name = ar.get("name",""); pop = ar.get("popularity",50)
+                    url = _artist_url(ar)
                     if name and url and pop <= pop_cap:
-                        lst.append((name, url))
-                # If still empty for this artist, include first two regardless of popularity
-                if not lst:
+                        base.append((name, url))
+                if not base and related:
                     for ar in related[:2]:
-                        name = ar.get("name"); url = (ar.get("external_urls") or {}).get("spotify", "")
-                        if name and url: lst.append((name, url))
+                        name = ar.get("name",""); url = _artist_url(ar)
+                        if name and url:
+                            base.append((name, url))
+                lst.extend(base)
+                # If still empty for this favorite, fall back to genre-similar
+                if not lst:
+                    exclude = {n.lower() for n,_ in base}
+                    lst.extend(_genre_similar_for_favorite(a_genres, exclude_names=exclude, cap=pop_cap))
             except Exception:
-                pass
+                # absolute fallback: genre-similar
+                lst.extend(_genre_similar_for_favorite(a_genres, exclude_names=set(), cap=pop_cap))
             per_aid_lists.append(lst)
         combined = _interleave_lists(per_aid_lists)
-        # Deduplicate by name
+        # Dedupe by name (case-insensitive)
         dedup, seen = [], set()
         for name, url in combined:
             k = (name or "").strip().lower()
@@ -650,19 +698,41 @@ def build_recommendation_buckets(
                 dedup.append((name, url))
         return dedup
 
+    # Try successive caps; if below min_artists, use global genre fill
     related_items: List[Tuple[str, str]] = []
     for cap in [artist_pop_max, min(artist_pop_max + 10, 80), 100]:
-        related_items = related_interleaved(cap)
+        related_items = related_interleaved_with_fallback(cap)
         if len(related_items) >= min_artists:
             break
     if len(related_items) < min_artists:
-        related_items = related_interleaved(100)
-    if not related_items:
-        related_items = [("Explore artists", "https://open.spotify.com/genre")]
+        # Global genre backfill across favorites' genres / defaults
+        global_fill: List[Tuple[str,str]] = []
+        # Collect a union of genres for all favorites
+        union_genres = {g for (_aid,_aname,gs) in fav_artist_infos for g in (gs or [])}
+        if not union_genres:
+            union_genres = {"indie","electronic","hip hop","pop","latin"}
+        used = set()
+        for g in list(union_genres)[:5]:
+            try:
+                items = sp.search_artists_by_genre(g, limit=30)
+                for ar in items[:5]:
+                    name = ar.get("name",""); aid = ar.get("id","")
+                    if not name or name.lower() in used: continue
+                    url = (ar.get("external_urls") or {}).get("spotify") or (f"https://open.spotify.com/artist/{aid}" if aid else "")
+                    if url:
+                        global_fill.append((name, url))
+                        used.add(name.lower())
+                        if len(global_fill) >= max(min_artists, per_bucket):
+                            break
+            except Exception:
+                continue
+            if len(global_fill) >= max(min_artists, per_bucket):
+                break
+        related_items = global_fill if global_fill else [("Explore artists", "https://open.spotify.com/genre")]
 
     buckets["Artists you should listen to"] = related_items[:max(per_bucket, min_artists)]
 
-    # 3) Rising stars in your genres (Search by genre) — interleave & guarantee min_artists with strong backfill
+    # ---------- 3) Rising stars in your genres ----------
     genre_pool = {g for (_aid, _aname, genres) in fav_artist_infos for g in (genres or [])}
     if not genre_pool:
         genre_pool |= _backfill_genres_from_related(sp, fav_artist_infos)
@@ -680,13 +750,15 @@ def build_recommendation_buckets(
                 # Include up to pop_cap
                 for ar in items:
                     pop = ar.get("popularity", 50)
-                    name = ar.get("name"); url = (ar.get("external_urls") or {}).get("spotify","")
+                    name = ar.get("name"); aid = ar.get("id","")
+                    url = (ar.get("external_urls") or {}).get("spotify") or (f"https://open.spotify.com/artist/{aid}" if aid else "")
                     if name and url and pop <= pop_cap:
                         lst.append((f"{name} ({genre})", url))
                 # If nothing, include a couple regardless of pop for this genre
                 if not lst:
                     for ar in items[:2]:
-                        name = ar.get("name"); url = (ar.get("external_urls") or {}).get("spotify","")
+                        name = ar.get("name"); aid = ar.get("id","")
+                        url = (ar.get("external_urls") or {}).get("spotify") or (f"https://open.spotify.com/artist/{aid}" if aid else "")
                         if name and url: lst.append((f"{name} ({genre})", url))
             except Exception:
                 pass
@@ -707,13 +779,14 @@ def build_recommendation_buckets(
         if len(rising_items) >= min_artists:
             break
     if len(rising_items) < min_artists:
-        # Final backfill: use related artists but label as mixed
+        # Final backfill: related artists (mixed)
         mixed = []
         try:
             for (aid, _aname, _g) in fav_artist_infos:
                 related = sp.get_related_artists(aid) or []
-                for ar in related[:2]:
-                    name = ar.get("name"); url = (ar.get("external_urls") or {}).get("spotify","")
+                for ar in related[:3]:
+                    name = ar.get("name"); aid = ar.get("id","")
+                    url = (ar.get("external_urls") or {}).get("spotify") or (f"https://open.spotify.com/artist/{aid}" if aid else "")
                     if name and url: mixed.append((f"{name} (mixed)", url))
         except Exception:
             pass
@@ -809,7 +882,7 @@ if run:
         st.warning("Please enter at least one valid Title + Artist pair.")
         st.stop()
 
-    # Automatic genre-driven background — based solely on inputs
+    # Auto genre-driven background — based solely on inputs
     genres = collect_genres_for_favorites(CLIENT_ID, CLIENT_SECRET, market, favorites)
     theme = pick_theme_by_genres(genres)
     st.markdown(theme["css"], unsafe_allow_html=True)
@@ -836,7 +909,6 @@ if run:
             recs = recommend_from_favorites(CLIENT_ID, CLIENT_SECRET, market, favorites, max_recs=3)
         st.subheader("Recommendations")
         if not recs:
-            # Final safety: show explore link rather than an empty section
             recs = [("Explore Spotify", "https://open.spotify.com/explore")]
         for i, (text, url) in enumerate(recs, start=1):
             st.write(f"**{i}. {text}**")
@@ -859,7 +931,6 @@ if run:
         st.subheader("Recommendations")
         for title, items in buckets.items():
             st.markdown(f"#### {title}")
-            # Never show "No items found" — backfill if needed
             if not items:
                 items = [("Explore Spotify", "https://open.spotify.com/explore")]
             for text, url in items:
