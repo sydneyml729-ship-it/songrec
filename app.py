@@ -1435,3 +1435,177 @@ _try_auto_apply()
 # Optional: expose a quick callable you can use anywhere:
 # apply_theme_for_genres(["indie pop", "alt rock", "trap"])
 
+
+# =========================
+# Comfort Palette Patch (low-contrast, eye-friendly)
+# =========================
+try:
+    import streamlit as st
+except Exception:
+    st = None
+
+def _norm(s: str) -> str:
+    return (s or "").strip().lower().replace("_", " ").replace("-", " ").replace("/", " ").replace("&", " and ")
+
+GENRE_ALIASES = {
+    "hip hop": "hip hop", "hiphop": "hip hop", "hip-hop": "hip hop",
+    "lofi": "lo-fi", "j-pop": "j-pop", "k-pop": "k-pop",
+    "alt rock": "alternative rock", "indie pop": "indie pop",
+    "dnb": "drum and bass"
+}
+
+# ---- Muted, comfortable themes (accents ~mid-saturation; gentle gradients) ----
+GENRE_THEMES_PATCH = {
+    # Pop family
+    "pop":                {"accent": "#c4739a", "gradient": "linear-gradient(135deg,#2a2a2a 0%,#242424 100%)", "emoji": "✨", "font": "system-ui"},
+    "indie pop":          {"accent": "#7fa88a", "gradient": "linear-gradient(135deg,#27302a 0%,#232a25 100%)", "emoji": "🌿", "font": "system-ui"},
+    "synthpop":           {"accent": "#9c86c9", "gradient": "linear-gradient(135deg,#2b2a33 0%,#252432 100%)", "emoji": "🎛️", "font": "system-ui"},
+    "electropop":         {"accent": "#8c89b8", "gradient": "linear-gradient(135deg,#2b2c33 0%,#252530 100%)", "emoji": "⚡", "font": "system-ui"},
+    "dance pop":          {"accent": "#c08b72", "gradient": "linear-gradient(135deg,#2b2b2b 0%,#252525 100%)", "emoji": "💃", "font": "system-ui"},
+    "hyperpop":           {"accent": "#b67aa5", "gradient": "linear-gradient(135deg,#2b2630 0%,#241f29 100%)", "emoji": "🫧", "font": "system-ui"},
+    "j-pop":              {"accent": "#c38ba0", "gradient": "linear-gradient(135deg,#2a2a31 0%,#24242c 100%)", "emoji": "🍡", "font": "system-ui"},
+    "k-pop":              {"accent": "#87a8bf", "gradient": "linear-gradient(135deg,#283035 0%,#22292e 100%)", "emoji": "🎀", "font": "system-ui"},
+
+    # Hip hop family
+    "hip hop":            {"accent": "#c59a56", "gradient": "linear-gradient(135deg,#232323 0%,#1d1d1d 100%)", "emoji": "🎤", "font": "system-ui"},
+    "trap":               {"accent": "#b7776d", "gradient": "linear-gradient(135deg,#242222 0%,#1e1c1c 100%)", "emoji": "🪤", "font": "system-ui"},
+    "drill":              {"accent": "#7b8fb2", "gradient": "linear-gradient(135deg,#20232a 0%,#1a1d23 100%)", "emoji": "🧱", "font": "system-ui"},
+
+    # Rock / alt / metal
+    "rock":               {"accent": "#b96565", "gradient": "linear-gradient(135deg,#2c2c2c 0%,#242424 100%)", "emoji": "🎸", "font": "system-ui"},
+    "alternative rock":   {"accent": "#b68c6e", "gradient": "linear-gradient(135deg,#2c2926 0%,#25231f 100%)", "emoji": "🌀", "font": "system-ui"},
+    "indie rock":         {"accent": "#7ba083", "gradient": "linear-gradient(135deg,#273129 0%,#222a24 100%)", "emoji": "🌲", "font": "system-ui"},
+    "shoegaze":           {"accent": "#8897b3", "gradient": "linear-gradient(135deg,#262a33 0%,#20242b 100%)", "emoji": "🌀", "font": "system-ui"},
+    "emo":                {"accent": "#9a87bd", "gradient": "linear-gradient(135deg,#292633 0%,#221f2c 100%)", "emoji": "🖤", "font": "system-ui"},
+    "metal":              {"accent": "#939aa3", "gradient": "linear-gradient(135deg,#2b2d31 0%,#24262a 100%)", "emoji": "🪙", "font": "system-ui"},
+    "heavy metal":        {"accent": "#9b9b9b", "gradient": "linear-gradient(135deg,#2f2f2f 0%,#262626 100%)", "emoji": "⚒️", "font": "system-ui"},
+
+    # Electronic & dance
+    "electronic":         {"accent": "#7ba7c6", "gradient": "linear-gradient(135deg,#23303a 0%,#1e2a34 100%)", "emoji": "⚡", "font": "system-ui"},
+    "edm":                {"accent": "#77b6a8", "gradient": "linear-gradient(135deg,#223033 0%,#1d292b 100%)", "emoji": "🎧", "font": "system-ui"},
+    "house":              {"accent": "#c4925f", "gradient": "linear-gradient(135deg,#2a2622 0%,#24211e 100%)", "emoji": "🏠", "font": "system-ui"},
+    "deep house":         {"accent": "#b78951", "gradient": "linear-gradient(135deg,#222422 0%,#1c1e1c 100%)", "emoji": "🌊", "font": "system-ui"},
+    "techno":             {"accent": "#9a9a9a", "gradient": "linear-gradient(135deg,#1f1f1f 0%,#181818 100%)", "emoji": "🧪", "font": "system-ui"},
+    "trance":             {"accent": "#9a87c6", "gradient": "linear-gradient(135deg,#241f2f 0%,#1e1928 100%)", "emoji": "🌀", "font": "system-ui"},
+    "drum and bass":      {"accent": "#74a79b", "gradient": "linear-gradient(135deg,#20302e 0%,#1b2523 100%)", "emoji": "🥁", "font": "system-ui"},
+    "dubstep":            {"accent": "#8c7fb8", "gradient": "linear-gradient(135deg,#232535 0%,#1d1f2c 100%)", "emoji": "🧨", "font": "system-ui"},
+    "ambient":            {"accent": "#8a7cc0", "gradient": "linear-gradient(135deg,#262039 0%,#201a31 100%)", "emoji": "🌌", "font": "Georgia, serif"},
+    "lo-fi":              {"accent": "#a6aec6", "gradient": "linear-gradient(135deg,#2b2f3f 0%,#242838 100%)", "emoji": "📻", "font": "system-ui"},
+
+    # R&B / soul / funk
+    "r&b":                {"accent": "#a489c3", "gradient": "linear-gradient(135deg,#2a2335 0%,#241f2f 100%)", "emoji": "💜", "font": "system-ui"},
+    "neo soul":           {"accent": "#9a82bf", "gradient": "linear-gradient(135deg,#292233 0%,#221d2b 100%)", "emoji": "🪩", "font": "system-ui"},
+    "soul":               {"accent": "#b8846b", "gradient": "linear-gradient(135deg,#2f241f 0%,#272019 100%)", "emoji": "🧡", "font": "system-ui"},
+    "funk":               {"accent": "#c39a4a", "gradient": "linear-gradient(135deg,#2f2a1a 0%,#262313 100%)", "emoji": "🕺", "font": "system-ui"},
+
+    # Jazz / Blues
+    "jazz":               {"accent": "#8b79be", "gradient": "linear-gradient(135deg,#241d36 0%,#1e182e 100%)", "emoji": "🎷", "font": "Georgia, serif"},
+    "blues":              {"accent": "#7397c2", "gradient": "linear-gradient(135deg,#1d2a38 0%,#17212d 100%)", "emoji": "🎸", "font": "Georgia, serif"},
+
+    # Latin / reggae
+    "latin":              {"accent": "#b36d6d", "gradient": "linear-gradient(135deg,#2d2222 0%,#251b1b 100%)", "emoji": "🌶️", "font": "system-ui"},
+    "reggaeton":          {"accent": "#b89d4f", "gradient": "linear-gradient(135deg,#2c2618 0%,#252114 100%)", "emoji": "💃", "font": "system-ui"},
+    "reggae":             {"accent": "#73a77e", "gradient": "linear-gradient(135deg,#1f2a22 0%,#19221c 100%)", "emoji": "🟩🟨🟥", "font": "system-ui"},
+
+    # Global / folk / country
+    "afrobeat":           {"accent": "#bd8649", "gradient": "linear-gradient(135deg,#2a251c 0%,#241f18 100%)", "emoji": "🪘", "font": "system-ui"},
+    "country":            {"accent": "#c29369", "gradient": "linear-gradient(135deg,#2f2a25 0%,#27231f 100%)", "emoji": "🤠", "font": "system-ui"},
+    "folk":               {"accent": "#8aa578", "gradient": "linear-gradient(135deg,#21281f 0%,#1b2219 100%)", "emoji": "🍂", "font": "system-ui"},
+
+    # Classical / soundtrack
+    "classical":          {"accent": "#b8ac8a", "gradient": "linear-gradient(135deg,#2f2c26 0%,#27241f 100%)", "emoji": "🎼", "font": "Georgia, serif"},
+    "soundtrack":         {"accent": "#8ba696", "gradient": "linear-gradient(135deg,#212b26 0%,#1b2320 100%)", "emoji": "🎬", "font": "system-ui"},
+}
+
+def patch_genre_themes():
+    global GENRE_THEMES
+    if "GENRE_THEMES" not in globals() or not isinstance(globals().get("GENRE_THEMES"), dict):
+        GENRE_THEMES = {}
+    for k, v in GENRE_THEMES_PATCH.items():
+        GENRE_THEMES.setdefault(k, dict(v))
+    return GENRE_THEMES
+
+def resolve_genre_key(g: str) -> str:
+    g0 = _norm(g)
+    if g0 in GENRE_THEMES: return g0
+    if g0 in GENRE_ALIASES and GENRE_ALIASES[g0] in GENRE_THEMES:
+        return GENRE_ALIASES[g0]
+    # simple parent inference (non-neon, muted defaults)
+    parents = [("metal","metal"),("rock","rock"),("pop","pop"),("hip","hip hop"),
+               ("house","house"),("techno","techno"),("trance","trance"),
+               ("ambient","ambient"),("lo fi","lo-fi"),("jazz","jazz"),
+               ("blues","blues"),("latin","latin"),("reggae","reggae"),
+               ("country","country"),("folk","folk"),("classical","classical"),
+               ("soundtrack","soundtrack")]
+    for kw, parent in parents:
+        if kw in g0 and parent in GENRE_THEMES:
+            return parent
+    return "pop" if "pop" in GENRE_THEMES else next(iter(GENRE_THEMES.keys()))
+
+def apply_theme(theme_key: str):
+    if st is None:
+        return
+    th = GENRE_THEMES.get(theme_key, {})
+    gradient = th.get("gradient", "linear-gradient(135deg,#262626 0%,#1f1f1f 100%)")
+    accent = th.get("accent", "#8fa3b8")
+    font = th.get("font", "system-ui")
+    emoji = th.get("emoji", "🎵")
+
+    # Softer text colors
+    base_text = "#eaeaea"
+    link_text = accent
+    code = f"""
+    <style>
+      :root {{ --accent: {accent}; --text: {base_text}; }}
+      html, body, [data-testid="stAppViewContainer"] {{
+        background: {gradient} !important;
+        color: var(--text);
+        font-family: {font}, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+      }}
+      h1, h2, h3, h4, h5, h6 {{ color: var(--text); }}
+      .stButton button {{
+        background: var(--accent) !important;
+        color: #1a1a1a !important; border: none !important;
+      }}
+      .stSelectbox div[role="combobox"], .stTextInput input {{
+        border: 1px solid rgba(255,255,255,0.12) !important;
+        background-color: rgba(255,255,255,0.02) !important;
+        color: var(--text) !important;
+      }}
+      a, .stMarkdown a {{ color: {link_text} !important; text-decoration-color: {link_text} !important; }}
+    </style>
+    """
+    st.markdown(code, unsafe_allow_html=True)
+    st.caption(f"{emoji} Theme: **{theme_key.title()}**")
+
+def apply_theme_for_genres(genres):
+    if not genres: return
+    for g in genres:
+        apply_theme(resolve_genre_key(g))
+        return
+
+def _try_auto_apply():
+    patch_genre_themes()
+    # Look for lists your app might already define
+    names = ("DOMINANT_GENRES", "dominant_genres", "user_genres", "genres", "detected_genres")
+    found = []
+    for n in names:
+        if n in globals():
+            val = globals()[n]
+            if isinstance(val, (list, tuple, set)):
+                found += list(val)
+            elif isinstance(val, dict):
+                found += list(val.keys())
+    # de-dup
+    seen, ordered = set(), []
+    for g in found:
+        gn = _norm(g)
+        if gn and gn not in seen:
+            ordered.append(gn); seen.add(gn)
+    if ordered:
+        apply_theme_for_genres(ordered)
+
+_try_auto_apply()
+
+
+
